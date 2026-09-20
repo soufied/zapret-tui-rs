@@ -131,8 +131,6 @@ pub fn preset_domains_file_path(preset_idx: usize) -> PathBuf {
     crate::config::get_cache_dir().join(name)
 }
 
-/// Read a domain list file. One domain per line, lines starting with `#` are
-/// treated as comments and skipped.
 pub fn load_domain_file(path: &std::path::Path) -> Vec<String> {
     if !path.exists() {
         return Vec::new();
@@ -147,8 +145,6 @@ pub fn load_domain_file(path: &std::path::Path) -> Vec<String> {
     }
 }
 
-/// Domains for a preset come entirely from its text file. If the file is
-/// missing or empty, the built-in defaults are used as a fallback.
 pub fn get_domains_for_preset(preset_idx: usize) -> Vec<String> {
     if preset_idx >= PRESETS.len() {
         return Vec::new();
@@ -160,8 +156,6 @@ pub fn get_domains_for_preset(preset_idx: usize) -> Vec<String> {
     PRESETS[preset_idx].domains.iter().map(|s| s.to_string()).collect()
 }
 
-/// Create/refresh the per-preset domain list files (and the TTL list) with the
-/// full built-in domain list so the user can add/remove domains freely.
 pub fn ensure_domain_files() -> Result<(), String> {
     for (idx, preset) in PRESETS.iter().enumerate() {
         let path = preset_domains_file_path(idx);

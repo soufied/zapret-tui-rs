@@ -16,6 +16,7 @@ pub enum ActiveScreen {
     ZapretTagSelect,
     StrategyTagSelect,
     ServiceSubmenu,
+    ServiceConflictSubmenu,
     ListsEditorSubmenu,
     AutotuneSubmenu,
     AutotuneEditDomainsSubmenu,
@@ -23,7 +24,12 @@ pub enum ActiveScreen {
     AutotuneBlockChecksSubmenu,
     AutotunePresetSelectionSubmenu,
     AutotuneStrategiesSubmenu,
+    AutotuneZ2PresetsSubmenu,
+    AutotuneZ2TargetsSubmenu,
     AutotuneResultsSubmenu,
+    SettingsSubmenu,
+    SettingsEditorSubmenu,
+    LogViewer,
 }
 
 #[derive(PartialEq, Clone, Copy, Debug)]
@@ -31,16 +37,18 @@ pub enum MainMenuState {
     #[cfg(target_os = "windows")]
     DefenderSettings,
     DownloadDeps,
+    Engine,
     Interface,
     Strategy,
     GamefilterSettings,
     #[cfg(target_os = "linux")]
     BackendSettings,
     IpsetMode,
+    TtlAutopick,
     ListsEditor,
     Autotune,
-    TtlAutopick,
     FakesSettings,
+    Settings,
     ServiceSettings,
     Run,
     Quit,
@@ -51,7 +59,8 @@ impl MainMenuState {
         match self {
             #[cfg(target_os = "windows")]
             Self::DefenderSettings => Self::DownloadDeps,
-            Self::DownloadDeps => Self::Interface,
+            Self::DownloadDeps => Self::Engine,
+            Self::Engine => Self::Interface,
             Self::Interface => Self::Strategy,
             Self::Strategy => Self::GamefilterSettings,
             #[cfg(target_os = "linux")]
@@ -60,11 +69,12 @@ impl MainMenuState {
             Self::BackendSettings => Self::IpsetMode,
             #[cfg(not(target_os = "linux"))]
             Self::GamefilterSettings => Self::IpsetMode,
-            Self::IpsetMode => Self::ListsEditor,
+            Self::IpsetMode => Self::TtlAutopick,
+            Self::TtlAutopick => Self::ListsEditor,
             Self::ListsEditor => Self::Autotune,
-            Self::Autotune => Self::TtlAutopick,
-            Self::TtlAutopick => Self::FakesSettings,
-            Self::FakesSettings => Self::ServiceSettings,
+            Self::Autotune => Self::FakesSettings,
+            Self::FakesSettings => Self::Settings,
+            Self::Settings => Self::ServiceSettings,
             Self::ServiceSettings => Self::Run,
             Self::Run => Self::Quit,
             #[cfg(target_os = "windows")]
@@ -82,7 +92,8 @@ impl MainMenuState {
             Self::DownloadDeps => Self::DefenderSettings,
             #[cfg(not(target_os = "windows"))]
             Self::DownloadDeps => Self::Quit,
-            Self::Interface => Self::DownloadDeps,
+            Self::Engine => Self::DownloadDeps,
+            Self::Interface => Self::Engine,
             Self::Strategy => Self::Interface,
             Self::GamefilterSettings => Self::Strategy,
             #[cfg(target_os = "linux")]
@@ -91,15 +102,43 @@ impl MainMenuState {
             Self::IpsetMode => Self::BackendSettings,
             #[cfg(not(target_os = "linux"))]
             Self::IpsetMode => Self::GamefilterSettings,
-            Self::ListsEditor => Self::IpsetMode,
+            Self::TtlAutopick => Self::IpsetMode,
+            Self::ListsEditor => Self::TtlAutopick,
             Self::Autotune => Self::ListsEditor,
-            Self::TtlAutopick => Self::Autotune,
-            Self::FakesSettings => Self::TtlAutopick,
-            Self::ServiceSettings => Self::FakesSettings,
+            Self::FakesSettings => Self::Autotune,
+            Self::Settings => Self::FakesSettings,
+            Self::ServiceSettings => Self::Settings,
             Self::Run => Self::ServiceSettings,
             Self::Quit => Self::Run,
         }
     }
+
+    pub fn is_visible_for(self, engine: &crate::config::ZapretEngine) -> bool {
+        !(self == Self::GamefilterSettings && !engine.supports_game_filter())
+    }
+
+    pub fn next_visible(self, engine: &crate::config::ZapretEngine) -> Self {
+        let mut candidate = self.next();
+        while !candidate.is_visible_for(engine) {
+            candidate = candidate.next();
+        }
+        candidate
+    }
+
+    pub fn prev_visible(self, engine: &crate::config::ZapretEngine) -> Self {
+        let mut candidate = self.prev();
+        while !candidate.is_visible_for(engine) {
+            candidate = candidate.prev();
+        }
+        candidate
+    }
+}
+
+#[derive(PartialEq, Clone, Copy, Debug)]
+pub enum PendingServiceAction {
+    Install,
+    Start,
+    Restart,
 }
 
 #[derive(PartialEq, Clone, Copy)]
@@ -186,8 +225,67 @@ impl DefenderMenuState {
 }
 
 #[derive(PartialEq, Clone, Copy, Debug)]
+pub enum SettingsMenuState {
+    Editor,
+    BackupLists,
+    ViewLogs,
+    Back,
+}
+
+impl SettingsMenuState {
+    pub fn all() -> &'static [Self] {
+        &[Self::Editor, Self::BackupLists, Self::ViewLogs, Self::Back]
+    }
+
+    pub fn index(self) -> usize {
+        match self {
+            Self::Editor => 0,
+            Self::BackupLists => 1,
+            Self::ViewLogs => 2,
+            Self::Back => 3,
+        }
+    }
+
+    pub fn from_index(index: usize) -> Self {
+        match index {
+            1 => Self::BackupLists,
+            2 => Self::ViewLogs,
+            3 => Self::Back,
+            _ => Self::Editor,
+        }
+    }
+
+    pub fn next(self) -> Self {
+        Self::from_index((self.index() + 1) % Self::all().len())
+    }
+
+    pub fn prev(self) -> Self {
+        let len = Self::all().len();
+        Self::from_index((self.index() + len - 1) % len)
+    }
+}
+
+#[derive(PartialEq, Clone, Copy, Debug)]
+pub enum EditorKind {
+    Auto,
+    Binary,
+    Custom,
+}
+
+#[derive(Clone, Debug)]
+pub struct EditorEntry {
+    pub kind: EditorKind,
+    pub command: String,
+    pub label: String,
+    pub installed: bool,
+}
+
+#[derive(PartialEq, Clone, Copy, Debug)]
 pub enum AutotuneMenuState {
     PresetSelection,
+    Z2Bundle,
+    Z2Presets,
+    Z2Targets,
     NumRequests,
     Strategies,
     Protocols,
@@ -273,7 +371,7 @@ impl AutotuneBlockChecksState {
             Self::SiberianBlock => 3,
             Self::QuicBlock => 4,
             Self::CidrWhitelist => 5,
-            Self::Back => unreachable!("Back has no block-check index"),
+            Self::Back => 6,
         }
     }
 }
@@ -281,7 +379,9 @@ impl AutotuneBlockChecksState {
 #[derive(PartialEq, Clone, Copy)]
 pub enum DownloadDepsMenuState {
     ZapretDownloader,
+    Zapret2Downloader,
     StrategiesDownloader,
+    Zapret2Strategies,
     DownloadDefaults,
     Back,
 }
@@ -289,8 +389,10 @@ pub enum DownloadDepsMenuState {
 impl DownloadDepsMenuState {
     pub fn next(self) -> Self {
         match self {
-            Self::ZapretDownloader => Self::StrategiesDownloader,
-            Self::StrategiesDownloader => Self::DownloadDefaults,
+            Self::ZapretDownloader => Self::Zapret2Downloader,
+            Self::Zapret2Downloader => Self::StrategiesDownloader,
+            Self::StrategiesDownloader => Self::Zapret2Strategies,
+            Self::Zapret2Strategies => Self::DownloadDefaults,
             Self::DownloadDefaults => Self::Back,
             Self::Back => Self::ZapretDownloader,
         }
@@ -299,8 +401,10 @@ impl DownloadDepsMenuState {
     pub fn prev(self) -> Self {
         match self {
             Self::ZapretDownloader => Self::Back,
-            Self::StrategiesDownloader => Self::ZapretDownloader,
-            Self::DownloadDefaults => Self::StrategiesDownloader,
+            Self::Zapret2Downloader => Self::ZapretDownloader,
+            Self::StrategiesDownloader => Self::Zapret2Downloader,
+            Self::Zapret2Strategies => Self::StrategiesDownloader,
+            Self::DownloadDefaults => Self::Zapret2Strategies,
             Self::Back => Self::DownloadDefaults,
         }
     }
@@ -358,6 +462,7 @@ impl VersionTarget {
 }
 
 pub struct AppState {
+    pub engine: crate::config::ZapretEngine,
     pub interfaces: Vec<String>,
     pub selected_interface: usize,
 
@@ -401,6 +506,8 @@ pub struct AppState {
     pub should_run: bool,
     pub should_quit: bool,
     pub should_download_zapret: bool,
+    pub should_download_zapret2: bool,
+    pub should_download_zapret2_strategies: bool,
     pub should_download_strategies: bool,
     pub should_download_defaults: bool,
     pub status_message: Option<String>,
@@ -411,6 +518,9 @@ pub struct AppState {
     pub service_installed: bool,
     pub service_active: bool,
     pub service_menu_index: usize,
+    pub service_conflict: Option<crate::inits::ServiceConflict>,
+    pub service_conflict_index: usize,
+    pub pending_service_action: Option<PendingServiceAction>,
 
     pub lists_files: Vec<String>,
     pub lists_menu_index: usize,
@@ -426,6 +536,14 @@ pub struct AppState {
     pub autotune_protocols_menu: AutotuneProtocolsState,
     pub autotune_block_checks_menu: AutotuneBlockChecksState,
     pub autotune_preset_index: usize,
+    pub z2_presets: Vec<String>,
+    pub z2_selected_presets: Vec<usize>,
+    pub z2_preset_index: usize,
+    pub z2_lists: Vec<String>,
+    pub z2_selected_lists: Vec<usize>,
+    pub z2_list_index: usize,
+    pub z2_targets: Vec<String>,
+    pub z2_bundle: crate::autotune::TargetBundle,
     pub autotune_strat_index: usize,
     pub autotune_results_index: usize,
     pub should_run_autotune: bool,
@@ -434,6 +552,16 @@ pub struct AppState {
     pub autotune_request_buf: String,
     pub should_run_ttl: bool,
     pub dpi_desync_ttl: Option<u8>,
+
+    pub settings_menu: SettingsMenuState,
+    pub editor_entries: Vec<EditorEntry>,
+    pub editor_index: usize,
+    pub editor_custom_editing: bool,
+    pub editor_custom_buf: String,
+    pub backup_lists: bool,
+    pub log_lines: Vec<String>,
+    pub log_scroll: usize,
+    pub dpi_running: bool,
 }
 
 impl AppState {
@@ -469,6 +597,16 @@ impl AppState {
         };
 
         let saved_cfg = crate::config::load_config(&crate::config::config_path().to_string_lossy()).ok();
+        let engine = saved_cfg
+            .as_ref()
+            .map_or(crate::config::ZapretEngine::Zapret1, |cfg| cfg.engine.clone());
+        std::env::set_var("REPO_DIR", engine.workspace_dir());
+        crate::runner::set_engine(engine.clone());
+        let strategies = if strategies.is_empty() || engine.uses_presets() {
+            crate::strategy::get_strategies_for(&engine)
+        } else {
+            strategies
+        };
 
         let selected_interface = saved_cfg.as_ref().map_or(0, |cfg| {
             interfaces.iter().position(|i| i == &cfg.interface).unwrap_or(0)
@@ -492,7 +630,9 @@ impl AppState {
             .position(|m| m == &current_ipset_mode)
             .unwrap_or(0);
 
+        let engine_for_checks = engine.clone();
         let mut app = Self {
+            engine,
             interfaces,
             selected_interface,
             #[cfg(target_os = "linux")]
@@ -535,16 +675,21 @@ impl AppState {
             should_run: false,
             should_quit: false,
             should_download_zapret: false,
+            should_download_zapret2: false,
+            should_download_zapret2_strategies: false,
             should_download_strategies: false,
             should_download_defaults: false,
             status_message: None,
 
-            nfqws_installed: crate::download::check_nfqws_installed(),
-            strategies_installed: crate::download::check_strategies_installed(),
+            nfqws_installed: crate::download::check_nfqws_installed_for(&engine_for_checks),
+            strategies_installed: crate::download::check_strategies_installed_for(&engine_for_checks),
 
             service_installed: false,
             service_active: false,
             service_menu_index: 0,
+            service_conflict: None,
+            service_conflict_index: 0,
+            pending_service_action: None,
 
             lists_files: Vec::new(),
             lists_menu_index: 0,
@@ -560,6 +705,14 @@ impl AppState {
             autotune_protocols_menu: AutotuneProtocolsState::Http,
             autotune_block_checks_menu: AutotuneBlockChecksState::DnsSpoof,
             autotune_preset_index: 0,
+            z2_presets: Vec::new(),
+            z2_selected_presets: Vec::new(),
+            z2_preset_index: 0,
+            z2_lists: Vec::new(),
+            z2_selected_lists: Vec::new(),
+            z2_list_index: 0,
+            z2_targets: Vec::new(),
+            z2_bundle: crate::autotune::TargetBundle::default(),
             autotune_strat_index: 0,
             autotune_results_index: 0,
             should_run_autotune: false,
@@ -568,14 +721,330 @@ impl AppState {
             autotune_request_buf: String::new(),
             should_run_ttl: false,
             dpi_desync_ttl: crate::config::load_ttl(),
+
+            settings_menu: SettingsMenuState::Editor,
+            editor_entries: Vec::new(),
+            editor_index: 0,
+            editor_custom_editing: false,
+            editor_custom_buf: String::new(),
+            backup_lists: crate::config::load_backup_lists(),
+            log_lines: Vec::new(),
+            log_scroll: 0,
+            dpi_running: false,
         };
+        app.refresh_editors();
+        app.reload_z2_lists();
         app.refresh_service_status();
+        app.refresh_runtime_status();
         app
     }
 
+    pub fn refresh_runtime_status(&mut self) {
+        self.dpi_running = crate::platform::is_nfqws_running();
+    }
+
+    pub fn status_fingerprint(&self) -> (bool, bool, bool, bool, bool, bool) {
+        (
+            self.service_installed,
+            self.service_active,
+            self.dpi_running,
+            self.nfqws_installed,
+            self.strategies_installed,
+            self.service_conflict.is_some(),
+        )
+    }
+
+    pub fn refresh_editors(&mut self) {
+        let configured = crate::config::load_editor();
+        let mut entries: Vec<EditorEntry> = Vec::new();
+
+        entries.push(EditorEntry {
+            kind: EditorKind::Auto,
+            command: String::new(),
+            label: rust_i18n::t!("settings_editor_auto_label").into_owned(),
+            installed: crate::utils::resolve_editor().is_some(),
+        });
+
+        for candidate in crate::utils::EDITOR_CANDIDATES {
+            entries.push(EditorEntry {
+                kind: EditorKind::Binary,
+                command: candidate.command.to_string(),
+                label: candidate.label.to_string(),
+                installed: crate::utils::editor_is_installed(candidate.command),
+            });
+        }
+
+        let known = entries
+            .iter()
+            .any(|e| e.kind == EditorKind::Binary && e.command == configured.trim());
+        let custom_value = if configured.trim().is_empty() || known {
+            String::new()
+        } else {
+            configured.trim().to_string()
+        };
+        let custom_installed = custom_value
+            .split_whitespace()
+            .next()
+            .map(crate::utils::editor_is_installed)
+            .unwrap_or(false);
+
+        entries.push(EditorEntry {
+            kind: EditorKind::Custom,
+            command: custom_value,
+            label: rust_i18n::t!("settings_editor_custom_label").into_owned(),
+            installed: custom_installed,
+        });
+
+        let selected = self.selected_editor_position(&entries, &configured);
+        self.editor_entries = entries;
+        self.editor_index = selected;
+    }
+
+    fn selected_editor_position(&self, entries: &[EditorEntry], configured: &str) -> usize {
+        let configured = configured.trim();
+        if configured.is_empty() {
+            return 0;
+        }
+        entries
+            .iter()
+            .position(|e| e.kind == EditorKind::Binary && e.command == configured)
+            .or_else(|| entries.iter().position(|e| e.kind == EditorKind::Custom))
+            .unwrap_or(0)
+    }
+
+    pub fn apply_editor_selection(&mut self, index: usize) {
+        let Some(entry) = self.editor_entries.get(index).cloned() else {
+            return;
+        };
+
+        match entry.kind {
+            EditorKind::Auto => {
+                let _ = crate::config::save_editor("");
+                self.refresh_editors();
+                self.status_message = Some(format!(
+                    "{} {}",
+                    rust_i18n::t!("settings_editor_saved"),
+                    crate::utils::active_editor_label()
+                ));
+            }
+            EditorKind::Binary => {
+                if !entry.installed {
+                    self.show_error(format!("{} {}", rust_i18n::t!("settings_editor_missing"), entry.command));
+                    return;
+                }
+                let _ = crate::config::save_editor(&entry.command);
+                self.refresh_editors();
+                self.status_message = Some(format!(
+                    "{} {}",
+                    rust_i18n::t!("settings_editor_saved"),
+                    entry.command
+                ));
+            }
+            EditorKind::Custom => {
+                self.editor_custom_buf = entry.command.clone();
+                self.editor_custom_editing = true;
+                self.status_message = Some(rust_i18n::t!("settings_editor_custom_hint").into_owned());
+            }
+        }
+    }
+
+    pub fn commit_custom_editor(&mut self) {
+        let value = self.editor_custom_buf.trim().to_string();
+        self.editor_custom_editing = false;
+        self.editor_custom_buf.clear();
+
+        if value.is_empty() {
+            let _ = crate::config::save_editor("");
+            self.refresh_editors();
+            self.status_message = Some(rust_i18n::t!("settings_editor_cleared").into_owned());
+            return;
+        }
+
+        let program = value.split_whitespace().next().unwrap_or("").to_string();
+        let _ = crate::config::save_editor(&value);
+        self.refresh_editors();
+
+        if crate::utils::editor_is_installed(&program) {
+            self.status_message = Some(format!("{} {}", rust_i18n::t!("settings_editor_saved"), value));
+        } else {
+            self.show_error(format!("{} {}", rust_i18n::t!("settings_editor_missing"), program));
+        }
+    }
+
+    pub fn toggle_backup_lists(&mut self) {
+        self.backup_lists = !self.backup_lists;
+        let _ = crate::config::save_backup_lists(self.backup_lists);
+    }
+
+    pub fn load_logs(&mut self) {
+        let path = crate::config::get_cache_dir().join("logs").join("zapret.log");
+        self.log_lines = crate::utils::read_log_tail(&path, 800);
+        if self.log_lines.is_empty() {
+            self.log_lines
+                .push(rust_i18n::t!("settings_logs_empty").into_owned());
+        }
+        self.log_scroll = self.log_lines.len().saturating_sub(1);
+    }
+
     pub fn refresh_dep_status(&mut self) {
-        self.nfqws_installed = crate::download::check_nfqws_installed();
-        self.strategies_installed = crate::download::check_strategies_installed();
+        self.nfqws_installed = crate::download::check_nfqws_installed_for(&self.engine);
+        self.strategies_installed = crate::download::check_strategies_installed_for(&self.engine);
+    }
+
+    pub fn switch_engine(&mut self) {
+        self.engine = match self.engine {
+            crate::config::ZapretEngine::Zapret1 => crate::config::ZapretEngine::Zapret2,
+            crate::config::ZapretEngine::Zapret2 => crate::config::ZapretEngine::Zapret1,
+        };
+        std::env::set_var("REPO_DIR", self.engine.workspace_dir());
+        crate::runner::set_engine(self.engine.clone());
+        self.strategies = crate::strategy::get_strategies_for(&self.engine);
+        self.selected_strategy = 0;
+        self.strategy_menu_index = 0;
+        self.autotune_config.strategy_indices.clear();
+        self.autotune_strat_index = 0;
+        self.autotune_results = None;
+        self.set_autotune_menu_index(0);
+        self.reload_z2_lists();
+        self.save_current_config();
+        self.refresh_dep_status();
+        self.refresh_service_status();
+        if !self.main_menu.is_visible_for(&self.engine) {
+            self.main_menu = self.main_menu.next_visible(&self.engine);
+        }
+        self.status_message = if self.engine.supports_game_filter() {
+            None
+        } else {
+            Some(rust_i18n::t!("msg_gf_preset_managed").into_owned())
+        };
+    }
+
+    pub fn reload_strategies(&mut self) {
+        let current = self.strategies.get(self.selected_strategy).cloned().unwrap_or_default();
+        self.strategies = crate::strategy::get_strategies_for(&self.engine);
+        self.selected_strategy = self.strategies.iter().position(|s| *s == current).unwrap_or(0);
+        self.strategy_menu_index = self.selected_strategy;
+    }
+
+    pub fn reload_z2_presets(&mut self) {
+        let previously: Vec<String> = self
+            .z2_selected_presets
+            .iter()
+            .filter_map(|&i| self.z2_presets.get(i).cloned())
+            .collect();
+
+        self.z2_presets = crate::strategy::zapret2_presets();
+        self.z2_selected_presets = self
+            .z2_presets
+            .iter()
+            .enumerate()
+            .filter(|(_, name)| previously.contains(name))
+            .map(|(i, _)| i)
+            .collect();
+
+        if self.z2_preset_index > self.z2_presets.len() {
+            self.z2_preset_index = 0;
+        }
+    }
+
+    pub fn reload_z2_lists(&mut self) {
+        let previously: Vec<String> = self
+            .z2_selected_lists
+            .iter()
+            .filter_map(|&i| self.z2_lists.get(i).cloned())
+            .collect();
+
+        self.z2_lists = crate::autotune::available_lists();
+        self.z2_selected_lists = self
+            .z2_lists
+            .iter()
+            .enumerate()
+            .filter(|(_, name)| previously.contains(name))
+            .map(|(i, _)| i)
+            .collect();
+
+        if self.z2_list_index > self.z2_lists.len() {
+            self.z2_list_index = 0;
+        }
+
+        self.refresh_z2_targets();
+    }
+
+    pub fn resolved_z2_lists(&self) -> Vec<String> {
+        if self.z2_bundle.is_manual() {
+            self.z2_selected_lists
+                .iter()
+                .filter_map(|&i| self.z2_lists.get(i).cloned())
+                .collect()
+        } else {
+            self.z2_bundle.resolve(&self.z2_lists)
+        }
+    }
+
+    pub fn refresh_z2_targets(&mut self) {
+        let lists = self.resolved_z2_lists();
+
+        self.z2_targets = if lists.is_empty() {
+            Vec::new()
+        } else {
+            crate::autotune::domains_from_lists(&lists, crate::autotune::Z2_MAX_TARGETS)
+        };
+    }
+
+    pub fn cycle_z2_bundle(&mut self, forward: bool) {
+        if self.z2_lists.is_empty() {
+            self.reload_z2_lists();
+        }
+        self.z2_bundle = self.z2_bundle.cycle(forward);
+        self.refresh_z2_targets();
+    }
+
+    pub fn z2_bundle_summary(&self) -> String {
+        if self.z2_bundle.is_manual() {
+            let count = self.z2_selected_lists.len();
+            if count == 0 {
+                return rust_i18n::t!("autotune_z2_default_targets").into_owned();
+            }
+            return format!("{} {}", count, rust_i18n::t!("autotune_z2_lists_suffix"));
+        }
+        let resolved = self.resolved_z2_lists();
+        format!("{} {}", resolved.len(), rust_i18n::t!("autotune_z2_lists_suffix"))
+    }
+
+    pub fn z2_selected_preset_names(&self) -> Vec<String> {
+        self.z2_selected_presets
+            .iter()
+            .filter_map(|&i| self.z2_presets.get(i).cloned())
+            .collect()
+    }
+
+    pub fn z2_config(&self) -> crate::autotune::Z2Config {
+        crate::autotune::Z2Config {
+            presets: self.z2_selected_preset_names(),
+            targets: self.z2_targets.clone(),
+            bundle: self.z2_bundle,
+            lists: self.resolved_z2_lists(),
+        }
+    }
+
+    pub fn z2_planned_counts(&self) -> (usize, usize) {
+        let presets = if self.z2_selected_presets.is_empty() {
+            if self.z2_presets.is_empty() {
+                self.strategies.len()
+            } else {
+                self.z2_presets.len()
+            }
+        } else {
+            self.z2_selected_presets.len()
+        };
+
+        let targets = if self.z2_targets.is_empty() {
+            crate::autotune::Z2_TARGETS.len()
+        } else {
+            self.z2_targets.len()
+        };
+
+        (presets, targets)
     }
 
     #[cfg(target_os = "windows")]
@@ -586,7 +1055,7 @@ impl AppState {
     pub fn refresh_service_status(&mut self) {
         #[cfg(target_os = "linux")]
         {
-            if let Some(mgr) = crate::inits::get_detected_manager() {
+            if let Some(mgr) = crate::inits::get_detected_manager_for(&self.engine) {
                 self.service_installed = mgr.is_installed();
                 self.service_active = mgr.is_active();
             } else {
@@ -606,6 +1075,8 @@ impl AppState {
             self.service_installed = false;
             self.service_active = false;
         }
+
+        self.service_conflict = crate::inits::legacy_service_conflict(&self.engine);
 
         let count = self.get_service_menu_count();
         if count > 0 && self.service_menu_index >= count {
@@ -638,7 +1109,95 @@ impl AppState {
         let backend = self.selected_backend.to_config();
         #[cfg(not(target_os = "linux"))]
         let backend = "nftables";
-        let _ = crate::config::save_tui_state(interface, strategy, self.tcp_gamefilter, self.udp_gamefilter, backend);
+        let _ = crate::config::save_tui_state(
+            &self.engine,
+            interface,
+            strategy,
+            self.tcp_gamefilter,
+            self.udp_gamefilter,
+            backend,
+        );
+    }
+
+    fn service_manager(&self) -> Option<Box<dyn crate::inits::ServiceManager>> {
+        #[cfg(target_os = "linux")]
+        {
+            crate::inits::get_detected_manager_for(&self.engine)
+        }
+        #[cfg(target_os = "windows")]
+        {
+            Some(Box::new(crate::inits::winservice::WindowsServiceManager))
+        }
+        #[cfg(not(any(target_os = "linux", target_os = "windows")))]
+        {
+            None
+        }
+    }
+
+    fn open_service_conflict(&mut self, action: PendingServiceAction) -> bool {
+        if self.service_conflict.is_none() {
+            return false;
+        }
+        self.pending_service_action = Some(action);
+        self.service_conflict_index = 1;
+        self.active_screen = ActiveScreen::ServiceConflictSubmenu;
+        self.status_message = Some(rust_i18n::t!("srv_conflict_status").into_owned());
+        true
+    }
+
+    pub fn cancel_service_conflict(&mut self) {
+        self.pending_service_action = None;
+        self.active_screen = ActiveScreen::ServiceSubmenu;
+        self.status_message = Some(rust_i18n::t!("srv_conflict_cancelled").into_owned());
+    }
+
+    pub fn resolve_service_conflict(&mut self) {
+        let action = self.pending_service_action.take();
+        self.active_screen = ActiveScreen::ServiceSubmenu;
+        self.service_menu_index = 0;
+
+        if let Err(e) = crate::inits::remove_legacy_service() {
+            self.refresh_service_status();
+            self.show_error(e);
+            return;
+        }
+
+        self.refresh_service_status();
+        match action {
+            Some(action) => self.continue_service_action(action),
+            None => {
+                self.status_message = Some(rust_i18n::t!("msg_op_ok").into_owned());
+            }
+        }
+    }
+
+    fn continue_service_action(&mut self, action: PendingServiceAction) {
+        let Some(mgr) = self.service_manager() else {
+            self.status_message = Some(rust_i18n::t!("msg_err_init").into_owned());
+            return;
+        };
+
+        let res = match action {
+            PendingServiceAction::Install => match std::env::current_exe() {
+                Ok(exe) => {
+                    let config_path = crate::config::config_path();
+                    let cache_dir = crate::config::get_cache_dir();
+                    mgr.install(&exe, &config_path, &cache_dir).and_then(|_| mgr.start())
+                }
+                Err(e) => Err(e.to_string()),
+            },
+            PendingServiceAction::Start => mgr.start(),
+            PendingServiceAction::Restart => mgr.restart(),
+        };
+
+        self.refresh_service_status();
+        match res {
+            Ok(_) => {
+                self.service_menu_index = 0;
+                self.status_message = Some(rust_i18n::t!("msg_op_ok").into_owned());
+            }
+            Err(e) => self.show_error(e),
+        }
     }
 
     pub fn get_service_menu_count(&self) -> usize {
@@ -681,9 +1240,9 @@ impl AppState {
         match self.active_screen {
             ActiveScreen::Main => {
                 self.main_menu = if forward {
-                    self.main_menu.next()
+                    self.main_menu.next_visible(&self.engine)
                 } else {
-                    self.main_menu.prev()
+                    self.main_menu.prev_visible(&self.engine)
                 }
             }
             #[cfg(target_os = "windows")]
@@ -759,16 +1318,19 @@ impl AppState {
                     self.service_menu_index = Self::cycle_index(self.service_menu_index, count, forward);
                 }
             }
+            ActiveScreen::ServiceConflictSubmenu => {
+                self.service_conflict_index = Self::cycle_index(self.service_conflict_index, 2, forward);
+            }
             ActiveScreen::ListsEditorSubmenu => {
-                let max = self.lists_files.len() + 1; // +1 for Back
+                let max = self.lists_files.len() + 1;
                 self.lists_menu_index = Self::cycle_index(self.lists_menu_index, max, forward);
             }
             ActiveScreen::AutotuneEditDomainsSubmenu => {
-                let max = self.domain_files.len() + 1; // +1 for Back
+                let max = self.domain_files.len() + 1;
                 self.domain_files_index = Self::cycle_index(self.domain_files_index, max, forward);
             }
             ActiveScreen::AutotuneSubmenu => {
-                let count = 9;
+                let count = self.autotune_menu_states().len();
                 self.set_autotune_menu_index(Self::cycle_index(self.autotune_menu_index, count, forward));
             }
             ActiveScreen::AutotuneProtocolsSubmenu => {
@@ -792,10 +1354,18 @@ impl AppState {
                 };
             }
             ActiveScreen::AutotuneStrategiesSubmenu => {
-                let max = self.strategies.len() + 1; // +1 for Back
+                let max = self.strategies.len() + 1;
                 if max > 0 {
                     self.autotune_strat_index = Self::cycle_index(self.autotune_strat_index, max, forward);
                 }
+            }
+            ActiveScreen::AutotuneZ2PresetsSubmenu => {
+                let max = self.z2_presets.len() + 1;
+                self.z2_preset_index = Self::cycle_index(self.z2_preset_index, max, forward);
+            }
+            ActiveScreen::AutotuneZ2TargetsSubmenu => {
+                let max = self.z2_lists.len() + 1;
+                self.z2_list_index = Self::cycle_index(self.z2_list_index, max, forward);
             }
             ActiveScreen::AutotuneResultsSubmenu => {
                 let total = self.count_results_items();
@@ -806,6 +1376,29 @@ impl AppState {
                         }
                     } else if self.autotune_results_index > 0 {
                         self.autotune_results_index -= 1;
+                    }
+                }
+            }
+            ActiveScreen::SettingsSubmenu => {
+                self.settings_menu = if forward {
+                    self.settings_menu.next()
+                } else {
+                    self.settings_menu.prev()
+                };
+            }
+            ActiveScreen::SettingsEditorSubmenu => {
+                let max = self.editor_entries.len() + 1;
+                self.editor_index = Self::cycle_index(self.editor_index, max, forward);
+            }
+            ActiveScreen::LogViewer => {
+                let total = self.log_lines.len();
+                if total > 0 {
+                    if forward {
+                        if self.log_scroll + 1 < total {
+                            self.log_scroll += 1;
+                        }
+                    } else if self.log_scroll > 0 {
+                        self.log_scroll -= 1;
                     }
                 }
             }
@@ -823,19 +1416,38 @@ impl AppState {
         }
     }
 
+    pub fn autotune_menu_states(&self) -> Vec<AutotuneMenuState> {
+        if self.engine.uses_presets() {
+            vec![
+                AutotuneMenuState::Z2Bundle,
+                AutotuneMenuState::Z2Targets,
+                AutotuneMenuState::Z2Presets,
+                AutotuneMenuState::Results,
+                AutotuneMenuState::Run,
+                AutotuneMenuState::Back,
+            ]
+        } else {
+            vec![
+                AutotuneMenuState::PresetSelection,
+                AutotuneMenuState::NumRequests,
+                AutotuneMenuState::Strategies,
+                AutotuneMenuState::Protocols,
+                AutotuneMenuState::BlockChecks,
+                AutotuneMenuState::EditDomains,
+                AutotuneMenuState::Results,
+                AutotuneMenuState::Run,
+                AutotuneMenuState::Back,
+            ]
+        }
+    }
+
     fn set_autotune_menu_index(&mut self, index: usize) {
-        self.autotune_menu_index = index % 9;
-        self.autotune_menu = match self.autotune_menu_index {
-            0 => AutotuneMenuState::PresetSelection,
-            1 => AutotuneMenuState::NumRequests,
-            2 => AutotuneMenuState::Strategies,
-            3 => AutotuneMenuState::Protocols,
-            4 => AutotuneMenuState::BlockChecks,
-            5 => AutotuneMenuState::EditDomains,
-            6 => AutotuneMenuState::Results,
-            7 => AutotuneMenuState::Run,
-            _ => AutotuneMenuState::Back,
-        };
+        let states = self.autotune_menu_states();
+        if states.is_empty() {
+            return;
+        }
+        self.autotune_menu_index = index % states.len();
+        self.autotune_menu = states[self.autotune_menu_index];
     }
 
     fn toggle_block_check(&mut self, index: usize) {
@@ -856,6 +1468,9 @@ impl AppState {
                 MainMenuState::DownloadDeps => {
                     self.active_screen = ActiveScreen::DownloadDepsSubmenu;
                     self.status_message = None;
+                }
+                MainMenuState::Engine => {
+                    self.switch_engine();
                 }
                 MainMenuState::Interface => {
                     if !self.interfaces.is_empty() {
@@ -893,9 +1508,13 @@ impl AppState {
                     self.status_message = None;
                 }
                 MainMenuState::GamefilterSettings => {
-                    self.active_screen = ActiveScreen::GamefilterSubmenu;
-                    self.gamefilter_menu = GamefilterMenuState::Tcp;
-                    self.status_message = None;
+                    if self.engine.supports_game_filter() {
+                        self.active_screen = ActiveScreen::GamefilterSubmenu;
+                        self.gamefilter_menu = GamefilterMenuState::Tcp;
+                        self.status_message = None;
+                    } else {
+                        self.status_message = Some(rust_i18n::t!("msg_gf_preset_managed").into_owned());
+                    }
                 }
                 MainMenuState::ServiceSettings => {
                     self.active_screen = ActiveScreen::ServiceSubmenu;
@@ -904,7 +1523,7 @@ impl AppState {
                     self.status_message = None;
                 }
                 MainMenuState::ListsEditor => {
-                    if !crate::download::check_strategies_installed() {
+                    if !crate::download::check_strategies_installed_for(&self.engine) {
                         self.show_error(rust_i18n::t!("err_no_strats").into_owned());
                     } else {
                         self.lists_files = crate::utils::get_lists_files();
@@ -915,8 +1534,7 @@ impl AppState {
                 }
                 MainMenuState::Autotune => {
                     self.active_screen = ActiveScreen::AutotuneSubmenu;
-                    self.autotune_menu_index = 0;
-                    self.autotune_menu = AutotuneMenuState::PresetSelection;
+                    self.set_autotune_menu_index(0);
                     self.has_autotune_results_file = crate::autotune::load_results_file().is_some();
                     self.status_message = None;
                 }
@@ -924,6 +1542,13 @@ impl AppState {
                     self.fakes_state = crate::fakes::load_fakes_state();
                     self.active_screen = ActiveScreen::FakesSubmenu;
                     self.fakes_menu = FakesMenuState::DiscordUdp;
+                    self.status_message = None;
+                }
+                MainMenuState::Settings => {
+                    self.refresh_editors();
+                    self.backup_lists = crate::config::load_backup_lists();
+                    self.settings_menu = SettingsMenuState::Editor;
+                    self.active_screen = ActiveScreen::SettingsSubmenu;
                     self.status_message = None;
                 }
                 MainMenuState::TtlAutopick => {
@@ -979,6 +1604,12 @@ impl AppState {
                     self.active_screen = ActiveScreen::DownloadZapretSubmenu;
                     self.download_zapret_menu = DownloadSubmenuState::Version;
                     self.status_message = None;
+                }
+                DownloadDepsMenuState::Zapret2Downloader => {
+                    self.should_download_zapret2 = true;
+                }
+                DownloadDepsMenuState::Zapret2Strategies => {
+                    self.should_download_zapret2_strategies = true;
                 }
                 DownloadDepsMenuState::StrategiesDownloader => {
                     self.active_screen = ActiveScreen::DownloadStrategiesSubmenu;
@@ -1124,13 +1755,7 @@ impl AppState {
                 }
             }
             ActiveScreen::ServiceSubmenu => {
-                #[cfg(target_os = "linux")]
-                let mgr_opt = crate::inits::get_detected_manager();
-                #[cfg(target_os = "windows")]
-                let mgr_opt: Option<Box<dyn crate::inits::ServiceManager>> =
-                    Some(Box::new(crate::inits::winservice::WindowsServiceManager));
-                #[cfg(not(any(target_os = "linux", target_os = "windows")))]
-                let mgr_opt: Option<Box<dyn crate::inits::ServiceManager>> = None;
+                let mgr_opt = self.service_manager();
 
                 if let Some(mgr) = mgr_opt {
                     let mut action_taken = true;
@@ -1138,6 +1763,9 @@ impl AppState {
                         match self.service_menu_index {
                             0 => {
                                 if !self.check_dependencies() {
+                                    action_taken = false;
+                                    Ok(())
+                                } else if self.open_service_conflict(PendingServiceAction::Install) {
                                     action_taken = false;
                                     Ok(())
                                 } else {
@@ -1170,6 +1798,9 @@ impl AppState {
                                 if !self.check_dependencies() {
                                     action_taken = false;
                                     Ok(())
+                                } else if self.open_service_conflict(PendingServiceAction::Restart) {
+                                    action_taken = false;
+                                    Ok(())
                                 } else {
                                     mgr.restart()
                                 }
@@ -1188,7 +1819,14 @@ impl AppState {
                         }
                     } else {
                         match self.service_menu_index {
-                            0 => mgr.start(),
+                            0 => {
+                                if self.open_service_conflict(PendingServiceAction::Start) {
+                                    action_taken = false;
+                                    Ok(())
+                                } else {
+                                    mgr.start()
+                                }
+                            }
                             1 => mgr.uninstall(),
                             2 => {
                                 self.active_screen = ActiveScreen::Main;
@@ -1220,6 +1858,10 @@ impl AppState {
                     self.status_message = Some(rust_i18n::t!("msg_err_init").into_owned());
                 }
             }
+            ActiveScreen::ServiceConflictSubmenu => match self.service_conflict_index {
+                0 => self.resolve_service_conflict(),
+                _ => self.cancel_service_conflict(),
+            },
             ActiveScreen::ListsEditorSubmenu => {
                 if self.lists_menu_index < self.lists_files.len() {
                     let file = self.lists_files[self.lists_menu_index].clone();
@@ -1231,6 +1873,41 @@ impl AppState {
             }
             ActiveScreen::AutotuneSubmenu => match self.autotune_menu {
                 AutotuneMenuState::PresetSelection => {}
+                AutotuneMenuState::Z2Bundle => {
+                    self.cycle_z2_bundle(true);
+                }
+                AutotuneMenuState::Z2Presets => {
+                    self.reload_z2_presets();
+                    if self.z2_presets.is_empty() {
+                        self.show_error(rust_i18n::t!("err_no_strats").into_owned());
+                    } else {
+                        self.z2_preset_index = 0;
+                        self.active_screen = ActiveScreen::AutotuneZ2PresetsSubmenu;
+                        self.status_message = None;
+                    }
+                }
+                AutotuneMenuState::Z2Targets => {
+                    self.reload_z2_lists();
+                    if self.z2_lists.is_empty() {
+                        self.show_error(rust_i18n::t!("autotune_z2_no_lists").into_owned());
+                    } else {
+                        if !self.z2_bundle.is_manual() {
+                            let preselected = self.resolved_z2_lists();
+                            self.z2_selected_lists = self
+                                .z2_lists
+                                .iter()
+                                .enumerate()
+                                .filter(|(_, name)| preselected.contains(name))
+                                .map(|(i, _)| i)
+                                .collect();
+                            self.z2_bundle = crate::autotune::TargetBundle::Manual;
+                            self.refresh_z2_targets();
+                        }
+                        self.z2_list_index = 0;
+                        self.active_screen = ActiveScreen::AutotuneZ2TargetsSubmenu;
+                        self.status_message = Some(rust_i18n::t!("autotune_z2_manual_switch").into_owned());
+                    }
+                }
                 AutotuneMenuState::NumRequests => {}
                 AutotuneMenuState::Strategies => {
                     if !self.strategies.is_empty() {
@@ -1342,10 +2019,40 @@ impl AppState {
                 };
                 self.status_message = Some(format!("{}: {}", rust_i18n::t!("autotune_preset_sel"), label));
             }
+            ActiveScreen::AutotuneZ2PresetsSubmenu => {
+                let idx = self.z2_preset_index;
+                if idx >= self.z2_presets.len() {
+                    self.active_screen = ActiveScreen::AutotuneSubmenu;
+                    self.status_message = None;
+                    return;
+                }
+                if let Some(pos) = self.z2_selected_presets.iter().position(|&i| i == idx) {
+                    self.z2_selected_presets.remove(pos);
+                } else {
+                    self.z2_selected_presets.push(idx);
+                }
+                self.z2_selected_presets.sort();
+                self.z2_selected_presets.dedup();
+            }
+            ActiveScreen::AutotuneZ2TargetsSubmenu => {
+                let idx = self.z2_list_index;
+                if idx >= self.z2_lists.len() {
+                    self.active_screen = ActiveScreen::AutotuneSubmenu;
+                    self.status_message = None;
+                    return;
+                }
+                if let Some(pos) = self.z2_selected_lists.iter().position(|&i| i == idx) {
+                    self.z2_selected_lists.remove(pos);
+                } else {
+                    self.z2_selected_lists.push(idx);
+                }
+                self.z2_selected_lists.sort();
+                self.z2_selected_lists.dedup();
+                self.refresh_z2_targets();
+            }
             ActiveScreen::AutotuneStrategiesSubmenu => {
-                let max = self.strategies.len(); // +1 for Back
+                let max = self.strategies.len();
                 if self.autotune_strat_index < max {
-                    // Toggle strategy selection
                     let idx = self.autotune_strat_index;
                     if let Some(pos) = self.autotune_config.strategy_indices.iter().position(|&i| i == idx) {
                         self.autotune_config.strategy_indices.remove(pos);
@@ -1353,7 +2060,6 @@ impl AppState {
                         self.autotune_config.strategy_indices.push(idx);
                     }
                 } else {
-                    // Back
                     self.active_screen = ActiveScreen::AutotuneSubmenu;
                     self.status_message = None;
                 }
@@ -1362,40 +2068,71 @@ impl AppState {
                 self.active_screen = ActiveScreen::AutotuneSubmenu;
                 self.status_message = None;
             }
+            ActiveScreen::SettingsSubmenu => match self.settings_menu {
+                SettingsMenuState::Editor => {
+                    self.refresh_editors();
+                    self.active_screen = ActiveScreen::SettingsEditorSubmenu;
+                    self.status_message = None;
+                }
+                SettingsMenuState::BackupLists => {
+                    self.toggle_backup_lists();
+                }
+                SettingsMenuState::ViewLogs => {
+                    self.load_logs();
+                    self.active_screen = ActiveScreen::LogViewer;
+                    self.status_message = None;
+                }
+                SettingsMenuState::Back => {
+                    self.active_screen = ActiveScreen::Main;
+                    self.status_message = None;
+                }
+            },
+            ActiveScreen::SettingsEditorSubmenu => {
+                if self.editor_index < self.editor_entries.len() {
+                    self.apply_editor_selection(self.editor_index);
+                } else {
+                    self.active_screen = ActiveScreen::SettingsSubmenu;
+                    self.status_message = None;
+                }
+            }
+            ActiveScreen::LogViewer => {
+                self.active_screen = ActiveScreen::SettingsSubmenu;
+                self.status_message = None;
+            }
         }
     }
 
     fn count_results_items(&self) -> usize {
         if let Some(ref results) = self.autotune_results {
-            let mut n = 10; // header + 6 net checks + blank
+            let mut n = 10;
             for pr in &results.preset_results {
-                n += 1; // preset header
+                n += 1;
                 n += pr.domain_checks.len();
                 if !pr.strategy_results.is_empty() {
-                    n += 1; // strategy header
+                    n += 1;
                     for sr in &pr.strategy_results {
-                        n += 1; // strategy name line
+                        n += 1;
                         n += sr.domain_checks.len();
                     }
                     let working_count = pr.strategy_results.iter().filter(|s| s.works).count();
                     if working_count > 0 {
-                        n += 1; // working summary header
+                        n += 1;
                         n += working_count;
                     }
                 }
-                n += 1; // blank
+                n += 1;
             }
             if !results.common_strategies.is_empty() {
-                n += 1; // common strategies header
+                n += 1;
                 n += results.common_strategies.len();
-                n += 1; // blank
+                n += 1;
             }
-            n += 1; // back
+            n += 1;
             n
         } else if let Some(cached) = crate::autotune::load_results_file() {
-            cached.lines().count() + 1 // lines + back
+            cached.lines().count() + 1
         } else {
-            2 // "no data" line + back
+            2
         }
     }
 
@@ -1403,7 +2140,6 @@ impl AppState {
         self.active_screen == ActiveScreen::Main && self.main_menu == MainMenuState::TtlAutopick
     }
 
-    /// Cycle the fixed TTL value with the left/right arrows (0 = off/autottl).
     pub fn change_ttl(&mut self, forward: bool) {
         let len = crate::ttl::TTL_MAX as i32 + 1;
         let current = self.dpi_desync_ttl.map_or(0, |v| v as i32);
@@ -1419,6 +2155,9 @@ impl AppState {
     pub fn cycle_current(&mut self, forward: bool) {
         match self.active_screen {
             ActiveScreen::Main => match self.main_menu {
+                MainMenuState::Engine => {
+                    self.switch_engine();
+                }
                 MainMenuState::Interface => {
                     if !self.interfaces.is_empty() {
                         let len = self.interfaces.len();
@@ -1575,8 +2314,33 @@ impl AppState {
             ActiveScreen::AutotuneStrategiesSubmenu => {
                 self.toggle_current();
             }
+            ActiveScreen::AutotuneZ2PresetsSubmenu => {
+                self.toggle_current();
+            }
+            ActiveScreen::AutotuneZ2TargetsSubmenu => {
+                self.toggle_current();
+            }
             ActiveScreen::AutotuneResultsSubmenu => {
                 self.active_screen = ActiveScreen::AutotuneSubmenu;
+                self.status_message = None;
+            }
+            ActiveScreen::SettingsSubmenu => match self.settings_menu {
+                SettingsMenuState::BackupLists => {
+                    self.toggle_backup_lists();
+                }
+                _ => {
+                    if forward {
+                        self.toggle_current();
+                    }
+                }
+            },
+            ActiveScreen::SettingsEditorSubmenu => {
+                if forward {
+                    self.toggle_current();
+                }
+            }
+            ActiveScreen::LogViewer => {
+                self.active_screen = ActiveScreen::SettingsSubmenu;
                 self.status_message = None;
             }
             _ => {
@@ -1585,5 +2349,277 @@ impl AppState {
                 }
             }
         }
+    }
+
+    pub fn screen_title(&self) -> String {
+        match self.active_screen {
+            ActiveScreen::Main => rust_i18n::t!("tui_title_main").into_owned(),
+            #[cfg(target_os = "windows")]
+            ActiveScreen::DefenderSubmenu => rust_i18n::t!("tui_title_defender").into_owned(),
+            ActiveScreen::StrategySubmenu => rust_i18n::t!("tui_title_strategy").into_owned(),
+            ActiveScreen::DownloadDepsSubmenu => rust_i18n::t!("tui_title_download_cat").into_owned(),
+            ActiveScreen::DownloadZapretSubmenu => rust_i18n::t!("tui_title_download_zapret").into_owned(),
+            ActiveScreen::DownloadStrategiesSubmenu => rust_i18n::t!("tui_title_download_strat").into_owned(),
+            ActiveScreen::GamefilterSubmenu => rust_i18n::t!("tui_title_gamefilter").into_owned(),
+            ActiveScreen::FakesSubmenu => rust_i18n::t!("tui_title_fakes").into_owned(),
+            ActiveScreen::FakesSelectSubmenu => rust_i18n::t!("menu_fakes_select_title").into_owned(),
+            ActiveScreen::ZapretTagSelect => rust_i18n::t!("tui_title_tag_zapret").into_owned(),
+            ActiveScreen::StrategyTagSelect => rust_i18n::t!("tui_title_tag_strat").into_owned(),
+            ActiveScreen::ServiceSubmenu => rust_i18n::t!("tui_title_service").into_owned(),
+            ActiveScreen::ServiceConflictSubmenu => rust_i18n::t!("tui_title_service_conflict").into_owned(),
+            ActiveScreen::ListsEditorSubmenu => rust_i18n::t!("tui_title_lists").into_owned(),
+            ActiveScreen::AutotuneSubmenu => rust_i18n::t!("tui_title_autotune").into_owned(),
+            ActiveScreen::AutotuneEditDomainsSubmenu => rust_i18n::t!("tui_title_autotune_edit_domains").into_owned(),
+            ActiveScreen::AutotuneProtocolsSubmenu => rust_i18n::t!("tui_title_autotune_proto").into_owned(),
+            ActiveScreen::AutotuneBlockChecksSubmenu => rust_i18n::t!("tui_title_autotune_bc").into_owned(),
+            ActiveScreen::AutotunePresetSelectionSubmenu => rust_i18n::t!("tui_title_autotune_presets").into_owned(),
+            ActiveScreen::AutotuneStrategiesSubmenu => rust_i18n::t!("tui_title_autotune_strat").into_owned(),
+            ActiveScreen::AutotuneZ2PresetsSubmenu => rust_i18n::t!("tui_title_autotune_z2_presets").into_owned(),
+            ActiveScreen::AutotuneZ2TargetsSubmenu => rust_i18n::t!("tui_title_autotune_z2_targets").into_owned(),
+            ActiveScreen::AutotuneResultsSubmenu => rust_i18n::t!("tui_title_autotune_results").into_owned(),
+            ActiveScreen::SettingsSubmenu => rust_i18n::t!("tui_title_settings").into_owned(),
+            ActiveScreen::SettingsEditorSubmenu => rust_i18n::t!("tui_title_settings_editor").into_owned(),
+            ActiveScreen::LogViewer => rust_i18n::t!("tui_title_logs").into_owned(),
+        }
+    }
+
+    pub fn breadcrumb(&self) -> Vec<String> {
+        let root = rust_i18n::t!("breadcrumb_root").into_owned();
+        let downloader = rust_i18n::t!("menu_main_downloader").into_owned();
+        let autotune = rust_i18n::t!("menu_main_autotune").into_owned();
+        let settings = rust_i18n::t!("menu_main_settings").into_owned();
+
+        match self.active_screen {
+            ActiveScreen::Main => vec![root],
+            #[cfg(target_os = "windows")]
+            ActiveScreen::DefenderSubmenu => vec![root, rust_i18n::t!("menu_main_defender").into_owned()],
+            ActiveScreen::StrategySubmenu => vec![root, rust_i18n::t!("menu_main_strategy").into_owned()],
+            ActiveScreen::DownloadDepsSubmenu => vec![root, downloader],
+            ActiveScreen::DownloadZapretSubmenu => {
+                vec![root, downloader, rust_i18n::t!("menu_dl_zapret").into_owned()]
+            }
+            ActiveScreen::DownloadStrategiesSubmenu => {
+                vec![root, downloader, rust_i18n::t!("menu_dl_strat").into_owned()]
+            }
+            ActiveScreen::ZapretTagSelect => vec![
+                root,
+                downloader,
+                rust_i18n::t!("menu_dl_zapret").into_owned(),
+                rust_i18n::t!("menu_subdl_tag").into_owned(),
+            ],
+            ActiveScreen::StrategyTagSelect => vec![
+                root,
+                downloader,
+                rust_i18n::t!("menu_dl_strat").into_owned(),
+                rust_i18n::t!("menu_subdl_tag").into_owned(),
+            ],
+            ActiveScreen::GamefilterSubmenu => vec![root, rust_i18n::t!("menu_main_gamefilter").into_owned()],
+            ActiveScreen::FakesSubmenu => vec![root, rust_i18n::t!("menu_main_fakes").into_owned()],
+            ActiveScreen::FakesSelectSubmenu => vec![
+                root,
+                rust_i18n::t!("menu_main_fakes").into_owned(),
+                rust_i18n::t!("menu_fakes_select_title").into_owned(),
+            ],
+            ActiveScreen::ServiceSubmenu => vec![root, rust_i18n::t!("menu_main_service").into_owned()],
+            ActiveScreen::ServiceConflictSubmenu => vec![
+                root,
+                rust_i18n::t!("menu_main_service").into_owned(),
+                rust_i18n::t!("srv_conflict_crumb").into_owned(),
+            ],
+            ActiveScreen::ListsEditorSubmenu => vec![root, rust_i18n::t!("menu_main_lists").into_owned()],
+            ActiveScreen::AutotuneSubmenu => vec![root, autotune],
+            ActiveScreen::AutotuneEditDomainsSubmenu => {
+                vec![root, autotune, rust_i18n::t!("menu_autotune_edit_domains").into_owned()]
+            }
+            ActiveScreen::AutotuneProtocolsSubmenu => {
+                vec![root, autotune, rust_i18n::t!("menu_autotune_protocols").into_owned()]
+            }
+            ActiveScreen::AutotuneBlockChecksSubmenu => {
+                vec![root, autotune, rust_i18n::t!("menu_autotune_blockchecks").into_owned()]
+            }
+            ActiveScreen::AutotunePresetSelectionSubmenu => {
+                vec![root, autotune, rust_i18n::t!("menu_autotune_domains").into_owned()]
+            }
+            ActiveScreen::AutotuneStrategiesSubmenu => {
+                vec![root, autotune, rust_i18n::t!("menu_autotune_strategies").into_owned()]
+            }
+            ActiveScreen::AutotuneZ2PresetsSubmenu => {
+                vec![root, autotune, rust_i18n::t!("menu_autotune_z2_presets").into_owned()]
+            }
+            ActiveScreen::AutotuneZ2TargetsSubmenu => {
+                vec![root, autotune, rust_i18n::t!("menu_autotune_z2_targets").into_owned()]
+            }
+            ActiveScreen::AutotuneResultsSubmenu => {
+                vec![root, autotune, rust_i18n::t!("menu_autotune_results").into_owned()]
+            }
+            ActiveScreen::SettingsSubmenu => vec![root, settings],
+            ActiveScreen::SettingsEditorSubmenu => {
+                vec![root, settings, rust_i18n::t!("settings_editor").into_owned()]
+            }
+            ActiveScreen::LogViewer => vec![root, settings, rust_i18n::t!("settings_logs").into_owned()],
+        }
+    }
+
+    pub fn help_text(&self) -> String {
+        if let Some(ref msg) = self.status_message {
+            return msg.clone();
+        }
+
+        match self.active_screen {
+            ActiveScreen::Main => match self.main_menu {
+                #[cfg(target_os = "windows")]
+                MainMenuState::DefenderSettings => rust_i18n::t!("help_def").into_owned(),
+                MainMenuState::DownloadDeps => rust_i18n::t!("help_dl").into_owned(),
+                MainMenuState::Engine => rust_i18n::t!("help_engine").into_owned(),
+                MainMenuState::Interface => rust_i18n::t!("help_iface").into_owned(),
+                MainMenuState::IpsetMode => rust_i18n::t!("help_ipset").into_owned(),
+                MainMenuState::Strategy => rust_i18n::t!("help_strat").into_owned(),
+                MainMenuState::GamefilterSettings => rust_i18n::t!("help_gf").into_owned(),
+                #[cfg(target_os = "linux")]
+                MainMenuState::BackendSettings => rust_i18n::t!("help_backend").into_owned(),
+                MainMenuState::ServiceSettings => rust_i18n::t!("help_srv").into_owned(),
+                MainMenuState::ListsEditor => rust_i18n::t!("help_lists").into_owned(),
+                MainMenuState::Autotune => rust_i18n::t!("help_autotune").into_owned(),
+                MainMenuState::TtlAutopick => rust_i18n::t!("help_ttl").into_owned(),
+                MainMenuState::FakesSettings => rust_i18n::t!("help_fakes").into_owned(),
+                MainMenuState::Settings => rust_i18n::t!("help_settings").into_owned(),
+                MainMenuState::Run => rust_i18n::t!("help_run").into_owned(),
+                MainMenuState::Quit => rust_i18n::t!("help_quit").into_owned(),
+            },
+            ActiveScreen::DownloadDepsSubmenu => match self.download_deps_menu {
+                DownloadDepsMenuState::ZapretDownloader => rust_i18n::t!("help_dl_zap").into_owned(),
+                DownloadDepsMenuState::Zapret2Downloader => rust_i18n::t!("help_dl_zapret2").into_owned(),
+                DownloadDepsMenuState::StrategiesDownloader => rust_i18n::t!("help_dl_str").into_owned(),
+                DownloadDepsMenuState::Zapret2Strategies => rust_i18n::t!("help_dl_zapret2_strat").into_owned(),
+                DownloadDepsMenuState::DownloadDefaults => rust_i18n::t!("help_dl_def").into_owned(),
+                DownloadDepsMenuState::Back => rust_i18n::t!("help_back").into_owned(),
+            },
+            ActiveScreen::DownloadZapretSubmenu => match self.download_zapret_menu {
+                DownloadSubmenuState::Version => rust_i18n::t!("help_dl_ver").into_owned(),
+                DownloadSubmenuState::SelectTag => rust_i18n::t!("help_dl_tag").into_owned(),
+                DownloadSubmenuState::Start => rust_i18n::t!("help_dl_start").into_owned(),
+                DownloadSubmenuState::Back => rust_i18n::t!("help_back").into_owned(),
+            },
+            ActiveScreen::DownloadStrategiesSubmenu => match self.download_strategies_menu {
+                DownloadSubmenuState::Version => rust_i18n::t!("help_dl_ver").into_owned(),
+                DownloadSubmenuState::SelectTag => rust_i18n::t!("help_dl_tag").into_owned(),
+                DownloadSubmenuState::Start => rust_i18n::t!("help_dl_start").into_owned(),
+                DownloadSubmenuState::Back => rust_i18n::t!("help_back").into_owned(),
+            },
+            ActiveScreen::GamefilterSubmenu => match self.gamefilter_menu {
+                GamefilterMenuState::Tcp => rust_i18n::t!("help_gf_tcp").into_owned(),
+                GamefilterMenuState::Udp => rust_i18n::t!("help_gf_udp").into_owned(),
+                GamefilterMenuState::Back => rust_i18n::t!("help_back").into_owned(),
+            },
+            ActiveScreen::FakesSubmenu => match self.fakes_menu {
+                FakesMenuState::DiscordUdp | FakesMenuState::GameUdp => rust_i18n::t!("help_fakes_sel").into_owned(),
+                FakesMenuState::Back => rust_i18n::t!("help_back").into_owned(),
+            },
+            ActiveScreen::FakesSelectSubmenu => rust_i18n::t!("help_fakes_select").into_owned(),
+            #[cfg(target_os = "windows")]
+            ActiveScreen::DefenderSubmenu => rust_i18n::t!("help_def_sel").into_owned(),
+            ActiveScreen::StrategySubmenu => rust_i18n::t!("help_strat_sel").into_owned(),
+            ActiveScreen::ZapretTagSelect => rust_i18n::t!("help_tag_sel").into_owned(),
+            ActiveScreen::StrategyTagSelect => rust_i18n::t!("help_tag_sel").into_owned(),
+            ActiveScreen::ServiceSubmenu => rust_i18n::t!("help_srv_sel").into_owned(),
+            ActiveScreen::ServiceConflictSubmenu => rust_i18n::t!("help_srv_conflict").into_owned(),
+            ActiveScreen::ListsEditorSubmenu => rust_i18n::t!("help_lists_edit").into_owned(),
+            ActiveScreen::AutotuneSubmenu => match self.autotune_menu {
+                AutotuneMenuState::PresetSelection => rust_i18n::t!("help_autotune_domains").into_owned(),
+                AutotuneMenuState::Z2Bundle => rust_i18n::t!("help_autotune_z2_bundle").into_owned(),
+                AutotuneMenuState::Z2Presets => rust_i18n::t!("help_autotune_z2_presets").into_owned(),
+                AutotuneMenuState::Z2Targets => rust_i18n::t!("help_autotune_z2_targets").into_owned(),
+                AutotuneMenuState::NumRequests => rust_i18n::t!("help_autotune_req").into_owned(),
+                AutotuneMenuState::Strategies => rust_i18n::t!("help_autotune_strat_sel").into_owned(),
+                AutotuneMenuState::Protocols => rust_i18n::t!("help_autotune_proto").into_owned(),
+                AutotuneMenuState::BlockChecks => rust_i18n::t!("help_autotune_blockchecks").into_owned(),
+                AutotuneMenuState::EditDomains => rust_i18n::t!("help_autotune_edit_domains").into_owned(),
+                AutotuneMenuState::Results => rust_i18n::t!("help_autotune_results_sel").into_owned(),
+                AutotuneMenuState::Run => rust_i18n::t!("help_autotune_run").into_owned(),
+                AutotuneMenuState::Back => rust_i18n::t!("help_back").into_owned(),
+            },
+            ActiveScreen::AutotuneProtocolsSubmenu => match self.autotune_protocols_menu {
+                AutotuneProtocolsState::Back => rust_i18n::t!("help_back").into_owned(),
+                _ => rust_i18n::t!("help_autotune_toggle").into_owned(),
+            },
+            ActiveScreen::AutotuneBlockChecksSubmenu => match self.autotune_block_checks_menu {
+                AutotuneBlockChecksState::Back => rust_i18n::t!("help_back").into_owned(),
+                _ => rust_i18n::t!("help_autotune_toggle").into_owned(),
+            },
+            ActiveScreen::AutotuneEditDomainsSubmenu => rust_i18n::t!("help_autotune_edit_domains").into_owned(),
+            ActiveScreen::AutotunePresetSelectionSubmenu => rust_i18n::t!("help_autotune_presets").into_owned(),
+            ActiveScreen::AutotuneStrategiesSubmenu => rust_i18n::t!("help_autotune_strat").into_owned(),
+            ActiveScreen::AutotuneZ2PresetsSubmenu => rust_i18n::t!("help_autotune_z2_presets").into_owned(),
+            ActiveScreen::AutotuneZ2TargetsSubmenu => rust_i18n::t!("help_autotune_z2_targets").into_owned(),
+            ActiveScreen::AutotuneResultsSubmenu => rust_i18n::t!("help_autotune_results").into_owned(),
+            ActiveScreen::SettingsSubmenu => match self.settings_menu {
+                SettingsMenuState::Editor => rust_i18n::t!("help_settings_editor").into_owned(),
+                SettingsMenuState::BackupLists => rust_i18n::t!("help_settings_backup").into_owned(),
+                SettingsMenuState::ViewLogs => rust_i18n::t!("help_settings_logs").into_owned(),
+                SettingsMenuState::Back => rust_i18n::t!("help_back").into_owned(),
+            },
+            ActiveScreen::SettingsEditorSubmenu => {
+                if self.editor_custom_editing {
+                    rust_i18n::t!("help_settings_editor_input").into_owned()
+                } else {
+                    rust_i18n::t!("help_settings_editor_sel").into_owned()
+                }
+            }
+            ActiveScreen::LogViewer => rust_i18n::t!("help_settings_logs_view").into_owned(),
+        }
+    }
+}
+
+#[cfg(all(test, target_os = "linux"))]
+mod nav_tests {
+    use super::MainMenuState;
+    use crate::config::ZapretEngine;
+
+    const VISUAL_ORDER: &[MainMenuState] = &[
+        MainMenuState::DownloadDeps,
+        MainMenuState::Engine,
+        MainMenuState::Interface,
+        MainMenuState::Strategy,
+        MainMenuState::GamefilterSettings,
+        MainMenuState::BackendSettings,
+        MainMenuState::IpsetMode,
+        MainMenuState::TtlAutopick,
+        MainMenuState::ListsEditor,
+        MainMenuState::Autotune,
+        MainMenuState::FakesSettings,
+        MainMenuState::Settings,
+        MainMenuState::ServiceSettings,
+        MainMenuState::Run,
+        MainMenuState::Quit,
+    ];
+
+    #[test]
+    fn navigation_follows_render_order() {
+        for pair in VISUAL_ORDER.windows(2) {
+            assert_eq!(pair[0].next(), pair[1]);
+            assert_eq!(pair[1].prev(), pair[0]);
+        }
+        assert_eq!(MainMenuState::Quit.next(), MainMenuState::DownloadDeps);
+        assert_eq!(MainMenuState::DownloadDeps.prev(), MainMenuState::Quit);
+    }
+
+    #[test]
+    fn ttl_autopick_follows_ipset_mode() {
+        assert_eq!(MainMenuState::IpsetMode.next(), MainMenuState::TtlAutopick);
+        assert_eq!(MainMenuState::TtlAutopick.next(), MainMenuState::ListsEditor);
+        assert_eq!(MainMenuState::Autotune.next(), MainMenuState::FakesSettings);
+        assert_eq!(MainMenuState::FakesSettings.prev(), MainMenuState::Autotune);
+        assert_eq!(MainMenuState::ListsEditor.prev(), MainMenuState::TtlAutopick);
+        assert_eq!(MainMenuState::TtlAutopick.prev(), MainMenuState::IpsetMode);
+    }
+
+    #[test]
+    fn game_filter_is_skipped_for_zapret2_only() {
+        let z1 = ZapretEngine::Zapret1;
+        let z2 = ZapretEngine::Zapret2;
+        assert_eq!(MainMenuState::Strategy.next_visible(&z1), MainMenuState::GamefilterSettings);
+        assert_eq!(MainMenuState::Strategy.next_visible(&z2), MainMenuState::BackendSettings);
+        assert_eq!(MainMenuState::BackendSettings.prev_visible(&z1), MainMenuState::GamefilterSettings);
+        assert_eq!(MainMenuState::BackendSettings.prev_visible(&z2), MainMenuState::Strategy);
     }
 }

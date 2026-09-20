@@ -68,7 +68,6 @@ fn wait_for_nfqws(timeout: Duration) -> bool {
         std::thread::sleep(Duration::from_millis(20));
     }
     if running && !super::types::is_cancelled() {
-        // Let nfqws bind its nfqueue/WinDivert handle before probing.
         std::thread::sleep(Duration::from_millis(100));
     }
     running && !super::types::is_cancelled()
@@ -107,12 +106,11 @@ pub fn run_all(
 ) -> AutotuneResults {
     super::types::reset_cancel();
     let start_instant = std::time::Instant::now();
-    // Temporarily set TTL to auto (None) during autotune, restoring original TTL on exit
+
     let original_ttl = crate::config::load_ttl();
     let _ttl_guard = TtlGuard { original_ttl };
     let _ = crate::config::save_ttl(None);
 
-    // Run network checks once (shared across all presets)
     let block_results = run_network_checks(&config.block_checks);
     let net_check_count = config.block_checks.count_enabled();
 
@@ -122,7 +120,6 @@ pub fn run_all(
 
     let proto_steps = count_protocol_steps(config);
 
-    // Calculate total steps upfront: network checks + per-preset baseline domain checks + strategy tests
     let mut total = net_check_count;
     for &preset_idx in config.preset_indices.iter() {
         let domain_count = get_domains_for_preset(preset_idx).len();
@@ -137,7 +134,6 @@ pub fn run_all(
 
     let mut done = 0;
 
-    // === Network checks ===
     for _result in block_results.iter() {
         done += 1;
         if !progress(done, total) {
@@ -154,7 +150,6 @@ pub fn run_all(
     let mut preset_results: Vec<PresetResult> = Vec::new();
     let mut all_working_strategy_names: Vec<std::collections::HashSet<String>> = Vec::new();
 
-    // Save ipset once for all presets
     let saved_ipset = save_ipset();
     set_ipset_any();
 
@@ -172,7 +167,6 @@ pub fn run_all(
             preset_name
         );
 
-        // === Per-domain protocol checks (without any strategy) ===
         let mut domain_checks = Vec::with_capacity(domains.len());
         let mut handles: Vec<std::thread::JoinHandle<DomainCheckResult>> = Vec::new();
         for d in &domains {
@@ -197,14 +191,12 @@ pub fn run_all(
             }
         }
 
-        // Determine which domains are blocked (baseline TLS 1.3 failed)
         let blocked_domains: Vec<String> = domain_checks
             .iter()
             .filter(|dc| !dc.baseline_pass)
             .map(|dc| dc.domain.clone())
             .collect();
 
-        // === Strategy testing with real nfqws ===
         let mut strategy_results: Vec<StrategyCheckResult> = Vec::new();
         let mut working_names: std::collections::HashSet<String> = std::collections::HashSet::new();
 
@@ -277,7 +269,7 @@ pub fn run_all(
                     continue;
                 }
 
-                const PROTOCOLS: usize = 4; // http, tls12, tls13, quic
+                const PROTOCOLS: usize = 4;
                 let mut results = vec![false; blocked_domains.len() * PROTOCOLS];
                 let n = config.num_requests;
 
@@ -326,7 +318,6 @@ pub fn run_all(
                         quic_works = true;
                     }
 
-                    // Browsers use HTTPS; plain HTTP (port 80) is not enough.
                     let ok = tls12_ok || tls13_ok;
                     if ok {
                         pass.push(domain.clone());
@@ -356,7 +347,6 @@ pub fn run_all(
                     }
                 }
 
-                // Credit steps for domains that passed baseline (unblocked)
                 let unblocked_count = domains.len().saturating_sub(blocked_domains.len());
                 for _ in 0..unblocked_count {
                     done += 1;
@@ -468,7 +458,6 @@ pub fn run_all(
         all_working_strategy_names.push(working_names);
     }
 
-    // Find common strategies (work across ALL presets)
     let common_strategies = if config.preset_indices.len() > 1 && !all_working_strategy_names.is_empty() {
         let mut common: std::collections::HashSet<String> = all_working_strategy_names[0].clone();
         for wm in &all_working_strategy_names[1..] {
@@ -478,7 +467,6 @@ pub fn run_all(
         v.sort();
         v
     } else {
-        // Single preset: all working strategies are "common"
         preset_results
             .first()
             .map(|pr| {
@@ -494,7 +482,6 @@ pub fn run_all(
             .unwrap_or_default()
     };
 
-    // Restore original ipset
     if let Some(ref saved) = saved_ipset {
         restore_ipset(saved);
         println!("  {}", rust_i18n::t!("autotune_ipset_restored"));

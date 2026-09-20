@@ -1,15 +1,374 @@
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
+
+pub struct EditorCandidate {
+    pub command: &'static str,
+    pub label: &'static str,
+    pub args: &'static [&'static str],
+}
+
+pub const EDITOR_CANDIDATES: &[EditorCandidate] = &[
+    EditorCandidate {
+        command: "nano",
+        label: "nano",
+        args: &[],
+    },
+    EditorCandidate {
+        command: "micro",
+        label: "micro",
+        args: &[],
+    },
+    EditorCandidate {
+        command: "vim",
+        label: "vim",
+        args: &[],
+    },
+    EditorCandidate {
+        command: "nvim",
+        label: "neovim",
+        args: &[],
+    },
+    EditorCandidate {
+        command: "hx",
+        label: "helix",
+        args: &[],
+    },
+    EditorCandidate {
+        command: "emacs",
+        label: "emacs",
+        args: &["-nw"],
+    },
+    EditorCandidate {
+        command: "vi",
+        label: "vi",
+        args: &[],
+    },
+    EditorCandidate {
+        command: "subl",
+        label: "sublime text",
+        args: &["--wait"],
+    },
+    EditorCandidate {
+        command: "code",
+        label: "vs code",
+        args: &["--wait"],
+    },
+    EditorCandidate {
+        command: "gedit",
+        label: "gedit",
+        args: &["--wait"],
+    },
+    EditorCandidate {
+        command: "kate",
+        label: "kate",
+        args: &["--block"],
+    },
+    EditorCandidate {
+        command: "notepad",
+        label: "notepad",
+        args: &[],
+    },
+];
+
+struct WaitRule {
+    long: &'static str,
+    short: char,
+}
+
+fn wait_rule(command: &str) -> Option<WaitRule> {
+    let file = Path::new(command).file_name()?.to_string_lossy().to_lowercase();
+    let name = file.trim_end_matches(".exe");
+
+    if name.starts_with("subl") {
+        return Some(WaitRule {
+            long: "--wait",
+            short: 'w',
+        });
+    }
+
+    match name {
+        "code" | "code-insiders" | "codium" | "vscodium" | "code-oss" | "gedit" => Some(WaitRule {
+            long: "--wait",
+            short: 'w',
+        }),
+        "kate" => Some(WaitRule {
+            long: "--block",
+            short: 'b',
+        }),
+        _ => None,
+    }
+}
+
+fn has_short_flag(arg: &str, flag: char) -> bool {
+    arg.len() > 1 && arg.starts_with('-') && !arg.starts_with("--") && arg[1..].contains(flag)
+}
+
+pub fn ensure_wait_flag(command: &str, mut args: Vec<String>) -> Vec<String> {
+    let Some(rule) = wait_rule(command) else {
+        return args;
+    };
+
+    let present = args
+        .iter()
+        .any(|a| a.as_str() == rule.long || has_short_flag(a, rule.short));
+    if !present {
+        args.insert(0, rule.long.to_string());
+    }
+    args
+}
+
+fn is_detaching_editor(command: &str) -> bool {
+    wait_rule(command).is_some()
+}
+
+pub fn candidate_args(command: &str) -> Vec<String> {
+    EDITOR_CANDIDATES
+        .iter()
+        .find(|c| c.command == command)
+        .map(|c| c.args.iter().map(|a| a.to_string()).collect())
+        .unwrap_or_default()
+}
+
+fn path_separator() -> char {
+    if cfg!(target_os = "windows") {
+        ';'
+    } else {
+        ':'
+    }
+}
+
+fn is_executable(path: &Path) -> bool {
+    if !path.is_file() {
+        return false;
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::metadata(path)
+            .map(|m| m.permissions().mode() & 0o111 != 0)
+            .unwrap_or(false)
+    }
+    #[cfg(not(unix))]
+    {
+        true
+    }
+}
+
+pub fn find_in_path(command: &str) -> Option<PathBuf> {
+    let command = command.trim();
+    if command.is_empty() {
+        return None;
+    }
+
+    let direct = Path::new(command);
+    if direct.components().count() > 1 || direct.is_absolute() {
+        return is_executable(direct).then(|| direct.to_path_buf());
+    }
+
+    let raw_path = std::env::var_os("PATH")?;
+    let raw_path = raw_path.to_string_lossy().into_owned();
+
+    let extensions: Vec<String> = if cfg!(target_os = "windows") {
+        let mut exts = vec![String::new()];
+        if let Ok(pathext) = std::env::var("PATHEXT") {
+            for ext in pathext.split(';') {
+                if !ext.trim().is_empty() {
+                    exts.push(ext.trim().to_lowercase());
+                }
+            }
+        } else {
+            exts.push(".exe".to_string());
+        }
+        exts
+    } else {
+        vec![String::new()]
+    };
+
+    for dir in raw_path.split(path_separator()) {
+        if dir.trim().is_empty() {
+            continue;
+        }
+        for ext in &extensions {
+            let candidate = Path::new(dir).join(format!("{}{}", command, ext));
+            if is_executable(&candidate) {
+                return Some(candidate);
+            }
+        }
+    }
+
+    None
+}
+
+pub fn editor_is_installed(command: &str) -> bool {
+    find_in_path(command).is_some()
+}
+
+#[derive(Debug, Clone)]
+pub struct ResolvedEditor {
+    pub command: String,
+    pub args: Vec<String>,
+    pub source: EditorSource,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+#[allow(dead_code)]
+pub enum EditorSource {
+    Configured,
+    Environment,
+    Detected,
+}
+
+fn split_command(raw: &str) -> Option<(String, Vec<String>)> {
+    let mut parts = raw.split_whitespace();
+    let program = parts.next()?.to_string();
+    let args: Vec<String> = parts.map(|s| s.to_string()).collect();
+    Some((program, args))
+}
+
+pub fn resolve_editor() -> Option<ResolvedEditor> {
+    let configured = crate::config::load_editor();
+    if !configured.trim().is_empty() {
+        if let Some((program, mut args)) = split_command(&configured) {
+            if editor_is_installed(&program) {
+                if args.is_empty() {
+                    args = candidate_args(&program);
+                }
+                let args = ensure_wait_flag(&program, args);
+                return Some(ResolvedEditor {
+                    command: program,
+                    args,
+                    source: EditorSource::Configured,
+                });
+            }
+        }
+    }
+
+    for var in ["VISUAL", "EDITOR"] {
+        let Ok(raw) = std::env::var(var) else {
+            continue;
+        };
+        let Some((program, mut args)) = split_command(&raw) else {
+            continue;
+        };
+        if editor_is_installed(&program) {
+            if args.is_empty() {
+                args = candidate_args(&program);
+            }
+            let args = ensure_wait_flag(&program, args);
+            return Some(ResolvedEditor {
+                command: program,
+                args,
+                source: EditorSource::Environment,
+            });
+        }
+    }
+
+    for candidate in EDITOR_CANDIDATES {
+        if editor_is_installed(candidate.command) {
+            let args = ensure_wait_flag(
+                candidate.command,
+                candidate.args.iter().map(|a| a.to_string()).collect(),
+            );
+            return Some(ResolvedEditor {
+                command: candidate.command.to_string(),
+                args,
+                source: EditorSource::Detected,
+            });
+        }
+    }
+
+    None
+}
+
+pub fn active_editor_label() -> String {
+    let configured = crate::config::load_editor();
+    if configured.trim().is_empty() {
+        return match resolve_editor() {
+            Some(ed) => format!("{} ({})", ed.command, rust_i18n::t!("settings_editor_auto")),
+            None => rust_i18n::t!("settings_editor_none").into_owned(),
+        };
+    }
+    configured
+}
+
+fn backup_dir() -> PathBuf {
+    crate::config::get_cache_dir().join("backups")
+}
+
+const MAX_BACKUPS_PER_FILE: usize = 10;
+
+fn prune_backups(stem: &str) {
+    let dir = backup_dir();
+    let Ok(entries) = fs::read_dir(&dir) else {
+        return;
+    };
+
+    let prefix = format!("{}.", stem);
+    let mut matching: Vec<(std::time::SystemTime, PathBuf)> = entries
+        .flatten()
+        .filter_map(|e| {
+            let name = e.file_name().into_string().ok()?;
+            if !name.starts_with(&prefix) || !name.ends_with(".bak") {
+                return None;
+            }
+            let modified = e.metadata().ok()?.modified().ok()?;
+            Some((modified, e.path()))
+        })
+        .collect();
+
+    if matching.len() <= MAX_BACKUPS_PER_FILE {
+        return;
+    }
+
+    matching.sort_by_key(|(t, _)| *t);
+    let excess = matching.len() - MAX_BACKUPS_PER_FILE;
+    for (_, path) in matching.into_iter().take(excess) {
+        let _ = fs::remove_file(path);
+    }
+}
+
+pub fn backup_file(file_path: &str) -> Option<PathBuf> {
+    let source = Path::new(file_path);
+    if !source.is_file() {
+        return None;
+    }
+
+    let stem = source.file_name()?.to_string_lossy().into_owned();
+    let dir = backup_dir();
+    if fs::create_dir_all(&dir).is_err() {
+        return None;
+    }
+
+    let stamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+
+    let target = dir.join(format!("{}.{}.bak", stem, stamp));
+    if fs::copy(source, &target).is_err() {
+        return None;
+    }
+
+    prune_backups(&stem);
+    Some(target)
+}
 
 pub fn get_lists_files() -> Vec<String> {
     let mut files = Vec::new();
 
-    // Check next to executable first
     let exe_dir = std::env::current_exe()
         .map(|p| p.parent().unwrap().to_path_buf())
         .unwrap_or_else(|_| std::env::current_dir().unwrap_or_default());
 
-    let base_dir = exe_dir.join("zapret-discord-youtube-linux");
+    let engine = crate::runner::active_engine();
+    let base_dir = {
+        let workspace = engine.workspace_dir();
+        if workspace.exists() {
+            workspace
+        } else {
+            exe_dir.join(engine.workspace_folder())
+        }
+    };
     let lists_dir = base_dir.join("lists");
 
     if lists_dir.exists() && lists_dir.is_dir() {
@@ -31,8 +390,8 @@ pub fn get_lists_files() -> Vec<String> {
             }
         }
     } else {
-        // Fallback to current directory for dev mode
-        let local_base = Path::new("zapret-discord-youtube-linux");
+        let local_base = std::path::PathBuf::from(engine.workspace_folder());
+        let local_base = local_base.as_path();
         let local_lists = local_base.join("lists");
 
         if local_lists.exists() && local_lists.is_dir() {
@@ -60,33 +419,111 @@ pub fn get_lists_files() -> Vec<String> {
     files
 }
 
-pub fn open_editor(file_path: &str) -> std::io::Result<std::process::ExitStatus> {
-    let editors = [
-        std::env::var("EDITOR").unwrap_or_default(),
-        "nano".to_string(),
-        "micro".to_string(),
-        "nvim".to_string(),
-        "vim".to_string(),
-        "vi".to_string(),
-        "notepad".to_string(), // Windows fallback
-    ];
+const GUI_STARTUP_GRACE_SECS: u64 = 10;
 
-    for editor in editors.iter() {
-        if editor.is_empty() {
+fn launch_editor(command: &str, args: &[String], file_path: &str) -> Option<std::process::ExitStatus> {
+    let started = std::time::Instant::now();
+    let status = std::process::Command::new(command)
+        .args(args)
+        .arg(file_path)
+        .status()
+        .ok()?;
+
+    let failed_at_startup = !status.success()
+        && is_detaching_editor(command)
+        && started.elapsed() < std::time::Duration::from_secs(GUI_STARTUP_GRACE_SECS);
+    if failed_at_startup {
+        return None;
+    }
+
+    Some(status)
+}
+
+pub fn open_editor(file_path: &str) -> std::io::Result<std::process::ExitStatus> {
+    if crate::config::load_backup_lists() {
+        let _ = backup_file(file_path);
+    }
+
+    let mut tried: Vec<String> = Vec::new();
+
+    if let Some(editor) = resolve_editor() {
+        if let Some(status) = launch_editor(&editor.command, &editor.args, file_path) {
+            return Ok(status);
+        }
+        tried.push(editor.command);
+    }
+
+    for candidate in EDITOR_CANDIDATES {
+        if tried.iter().any(|t| t.as_str() == candidate.command) || !editor_is_installed(candidate.command) {
             continue;
         }
-
-        let status = std::process::Command::new(editor).arg(file_path).status();
-
-        if let Ok(st) = status {
-            if st.success() || st.code().is_some() {
-                return Ok(st);
-            }
+        let args = ensure_wait_flag(
+            candidate.command,
+            candidate.args.iter().map(|a| a.to_string()).collect(),
+        );
+        if let Some(status) = launch_editor(candidate.command, &args, file_path) {
+            return Ok(status);
         }
+        tried.push(candidate.command.to_string());
     }
 
     Err(std::io::Error::new(
         std::io::ErrorKind::NotFound,
         "No suitable editor found",
     ))
+}
+
+pub fn read_log_tail(path: &Path, max_lines: usize) -> Vec<String> {
+    let Ok(content) = fs::read_to_string(path) else {
+        return Vec::new();
+    };
+    let lines: Vec<&str> = content.lines().collect();
+    let start = lines.len().saturating_sub(max_lines);
+    lines[start..].iter().map(|l| l.to_string()).collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn owned(items: &[&str]) -> Vec<String> {
+        items.iter().map(|s| s.to_string()).collect()
+    }
+
+    #[test]
+    fn sublime_gets_wait_flag() {
+        assert_eq!(ensure_wait_flag("subl", Vec::new()), owned(&["--wait"]));
+        assert_eq!(ensure_wait_flag("/usr/bin/subl", owned(&["-n"])), owned(&["--wait", "-n"]));
+        assert_eq!(ensure_wait_flag("sublime_text", Vec::new()), owned(&["--wait"]));
+        assert_eq!(ensure_wait_flag("subl.exe", Vec::new()), owned(&["--wait"]));
+    }
+
+    #[test]
+    fn existing_wait_flag_is_not_duplicated() {
+        assert_eq!(ensure_wait_flag("subl", owned(&["-w"])), owned(&["-w"]));
+        assert_eq!(ensure_wait_flag("subl", owned(&["--wait"])), owned(&["--wait"]));
+        assert_eq!(ensure_wait_flag("subl", owned(&["-nw"])), owned(&["-nw"]));
+    }
+
+    #[test]
+    fn long_options_containing_w_do_not_count_as_wait() {
+        assert_eq!(
+            ensure_wait_flag("subl", owned(&["--new-window"])),
+            owned(&["--wait", "--new-window"])
+        );
+    }
+
+    #[test]
+    fn other_gui_editors_get_their_blocking_flag() {
+        assert_eq!(ensure_wait_flag("code", Vec::new()), owned(&["--wait"]));
+        assert_eq!(ensure_wait_flag("gedit", Vec::new()), owned(&["--wait"]));
+        assert_eq!(ensure_wait_flag("kate", Vec::new()), owned(&["--block"]));
+        assert_eq!(ensure_wait_flag("kate", owned(&["-b"])), owned(&["-b"]));
+    }
+
+    #[test]
+    fn terminal_editors_are_untouched() {
+        assert_eq!(ensure_wait_flag("nano", Vec::new()), Vec::<String>::new());
+        assert_eq!(ensure_wait_flag("vim", owned(&["-p"])), owned(&["-p"]));
+    }
 }

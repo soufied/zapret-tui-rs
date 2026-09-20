@@ -3,15 +3,24 @@ use std::fs;
 use std::path::Path;
 use std::process::Command;
 
-pub struct S6Manager;
+pub struct S6Manager {
+    name: &'static str,
+}
 
 impl S6Manager {
-    const SERVICE_DIR: &'static str = "/etc/s6/services/zapret-rust";
+    pub fn new(name: &'static str) -> Self {
+        Self { name }
+    }
+
+    fn service_dir(&self) -> String {
+        format!("/etc/s6/services/{}", self.name)
+    }
 
     fn run_s6_svc(&self, flag: &str) -> Result<(), String> {
+        let service_dir = self.service_dir();
         let output = Command::new("s6-svc")
             .arg(flag)
-            .arg(Self::SERVICE_DIR)
+            .arg(&service_dir)
             .output()
             .map_err(|e| format!("{}{}", rust_i18n::t!("err_exec_s6"), e))?;
         if output.status.success() {
@@ -21,7 +30,7 @@ impl S6Manager {
             Err(format!(
                 "s6-svc {} {} failed: {}",
                 flag,
-                Self::SERVICE_DIR,
+                service_dir,
                 if stderr.is_empty() {
                     format!("exit code {:?}", output.status.code())
                 } else {
@@ -34,11 +43,11 @@ impl S6Manager {
 
 impl ServiceManager for S6Manager {
     fn is_installed(&self) -> bool {
-        Path::new(Self::SERVICE_DIR).exists()
+        Path::new(&self.service_dir()).exists()
     }
 
     fn is_active(&self) -> bool {
-        let output = Command::new("s6-svstat").arg(Self::SERVICE_DIR).output();
+        let output = Command::new("s6-svstat").arg(self.service_dir()).output();
         match output {
             Ok(out) if out.status.success() => {
                 let stdout = String::from_utf8_lossy(&out.stdout);
@@ -57,11 +66,10 @@ impl ServiceManager for S6Manager {
             .to_str()
             .ok_or(rust_i18n::t!("err_invalid_cache").into_owned())?;
 
-        // 1. Create S6 dir
-        fs::create_dir_all(Self::SERVICE_DIR).map_err(|e| format!("{}{}", rust_i18n::t!("err_mkdir_s6"), e))?;
+        let service_dir = self.service_dir();
+        fs::create_dir_all(&service_dir).map_err(|e| format!("{}{}", rust_i18n::t!("err_mkdir_s6"), e))?;
 
-        // 2. Write run file
-        let run_path = Path::new(Self::SERVICE_DIR).join("run");
+        let run_path = Path::new(&service_dir).join("run");
         let run_content = format!(
             r#"#!/bin/sh
 exec {} --config {} --cache-dir {}
@@ -70,7 +78,6 @@ exec {} --config {} --cache-dir {}
         );
         fs::write(&run_path, run_content).map_err(|e| format!("{}{}", rust_i18n::t!("err_write_run"), e))?;
 
-        // 3. Make run script executable
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
@@ -82,12 +89,11 @@ exec {} --config {} --cache-dir {}
     }
 
     fn uninstall(&self) -> Result<(), String> {
-        // Stop service first (ignore errors)
         let _ = self.run_s6_svc("-d");
 
-        // Remove service directory
-        if Path::new(Self::SERVICE_DIR).exists() {
-            fs::remove_dir_all(Self::SERVICE_DIR).map_err(|e| format!("{}{}", rust_i18n::t!("err_rm_s6"), e))?;
+        let service_dir = self.service_dir();
+        if Path::new(&service_dir).exists() {
+            fs::remove_dir_all(&service_dir).map_err(|e| format!("{}{}", rust_i18n::t!("err_rm_s6"), e))?;
         }
 
         Ok(())

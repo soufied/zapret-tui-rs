@@ -3,11 +3,18 @@ use std::fs;
 use std::path::Path;
 use std::process::Command;
 
-pub struct SystemdManager;
+pub struct SystemdManager {
+    name: &'static str,
+}
 
 impl SystemdManager {
-    const SERVICE_NAME: &'static str = "zapret-rust";
-    const SERVICE_PATH: &'static str = "/etc/systemd/system/zapret-rust.service";
+    pub fn new(name: &'static str) -> Self {
+        Self { name }
+    }
+
+    fn service_path(&self) -> String {
+        format!("/etc/systemd/system/{}.service", self.name)
+    }
 
     fn run_command(&self, args: &[&str]) -> Result<(), String> {
         let output = Command::new("systemctl")
@@ -33,14 +40,19 @@ impl SystemdManager {
 
 impl ServiceManager for SystemdManager {
     fn is_installed(&self) -> bool {
-        Path::new(Self::SERVICE_PATH).exists()
+        Path::new(&self.service_path()).exists()
     }
 
     fn is_active(&self) -> bool {
-        let output = Command::new("systemctl")
-            .arg("is-active")
-            .arg(Self::SERVICE_NAME)
-            .output();
+        let output = Command::new("systemctl").arg("is-active").arg(self.name).output();
+        match output {
+            Ok(out) => out.status.success(),
+            Err(_) => false,
+        }
+    }
+
+    fn is_enabled(&self) -> bool {
+        let output = Command::new("systemctl").arg("is-enabled").arg(self.name).output();
         match output {
             Ok(out) => out.status.success(),
             Err(_) => false,
@@ -58,7 +70,7 @@ impl ServiceManager for SystemdManager {
 
         let service_content = format!(
             r#"[Unit]
-Description=Zapret Discord Youtube Service
+Description={}
 After=network-online.target
 Wants=network-online.target
 
@@ -71,25 +83,28 @@ RestartSec=5
 [Install]
 WantedBy=multi-user.target
 "#,
-            exe_str, config_str, cache_str
+            crate::inits::service_description(self.name),
+            exe_str,
+            config_str,
+            cache_str
         );
 
-        fs::write(Self::SERVICE_PATH, service_content)
+        fs::write(self.service_path(), service_content)
             .map_err(|e| format!("{}{}", rust_i18n::t!("err_write_svc"), e))?;
 
         self.run_command(&["daemon-reload"])?;
-        self.run_command(&["enable", Self::SERVICE_NAME])?;
+        self.run_command(&["enable", self.name])?;
 
         Ok(())
     }
 
     fn uninstall(&self) -> Result<(), String> {
-        // Stop service first (ignore errors if it's not running or doesn't exist)
-        let _ = self.run_command(&["stop", Self::SERVICE_NAME]);
-        let _ = self.run_command(&["disable", Self::SERVICE_NAME]);
+        let _ = self.run_command(&["stop", self.name]);
+        let _ = self.run_command(&["disable", self.name]);
 
-        if Path::new(Self::SERVICE_PATH).exists() {
-            fs::remove_file(Self::SERVICE_PATH).map_err(|e| format!("{}{}", rust_i18n::t!("err_rm_svc"), e))?;
+        let service_path = self.service_path();
+        if Path::new(&service_path).exists() {
+            fs::remove_file(&service_path).map_err(|e| format!("{}{}", rust_i18n::t!("err_rm_svc"), e))?;
         }
 
         self.run_command(&["daemon-reload"])?;
@@ -97,14 +112,14 @@ WantedBy=multi-user.target
     }
 
     fn start(&self) -> Result<(), String> {
-        self.run_command(&["start", Self::SERVICE_NAME])
+        self.run_command(&["start", self.name])
     }
 
     fn stop(&self) -> Result<(), String> {
-        self.run_command(&["stop", Self::SERVICE_NAME])
+        self.run_command(&["stop", self.name])
     }
 
     fn restart(&self) -> Result<(), String> {
-        self.run_command(&["restart", Self::SERVICE_NAME])
+        self.run_command(&["restart", self.name])
     }
 }

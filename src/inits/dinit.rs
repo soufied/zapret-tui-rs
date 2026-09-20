@@ -3,18 +3,29 @@ use std::fs;
 use std::path::Path;
 use std::process::Command;
 
-pub struct DinitManager;
+pub struct DinitManager {
+    name: &'static str,
+}
 
 impl DinitManager {
-    const SERVICE_PATH: &'static str = "/etc/dinit.d/zapret-rust";
     const BOOT_DIR: &'static str = "/etc/dinit.d/boot.d";
-    const BOOT_LINK: &'static str = "/etc/dinit.d/boot.d/zapret-rust";
-    const SERVICE_NAME: &'static str = "zapret-rust";
+
+    pub fn new(name: &'static str) -> Self {
+        Self { name }
+    }
+
+    fn service_path(&self) -> String {
+        format!("/etc/dinit.d/{}", self.name)
+    }
+
+    fn boot_link(&self) -> String {
+        format!("{}/{}", Self::BOOT_DIR, self.name)
+    }
 
     fn run_dinitctl(&self, action: &str) -> Result<(), String> {
         let output = Command::new("dinitctl")
             .arg(action)
-            .arg(Self::SERVICE_NAME)
+            .arg(self.name)
             .output()
             .map_err(|e| format!("{}{}", rust_i18n::t!("err_exec_dinit"), e))?;
         if output.status.success() {
@@ -24,7 +35,7 @@ impl DinitManager {
             Err(format!(
                 "dinitctl {} {} failed: {}",
                 action,
-                Self::SERVICE_NAME,
+                self.name,
                 if stderr.is_empty() {
                     format!("exit code {:?}", output.status.code())
                 } else {
@@ -37,11 +48,11 @@ impl DinitManager {
 
 impl ServiceManager for DinitManager {
     fn is_installed(&self) -> bool {
-        Path::new(Self::SERVICE_PATH).exists()
+        Path::new(&self.service_path()).exists()
     }
 
     fn is_active(&self) -> bool {
-        let output = Command::new("dinitctl").arg("status").arg(Self::SERVICE_NAME).output();
+        let output = Command::new("dinitctl").arg("status").arg(self.name).output();
         match output {
             Ok(out) if out.status.success() => {
                 let stdout = String::from_utf8_lossy(&out.stdout);
@@ -69,22 +80,22 @@ restart-delay = 5
             exe_str, config_str, cache_str
         );
 
-        fs::write(Self::SERVICE_PATH, service_content)
+        fs::write(self.service_path(), service_content)
             .map_err(|e| format!("{}{}", rust_i18n::t!("err_write_dinit"), e))?;
 
-        // Try to enable it by symlinking in boot.d
         if let Err(e) = fs::create_dir_all(Self::BOOT_DIR) {
             println!(
                 "  (could not create boot.d directory, auto-start might not work: {})",
                 e
             );
         } else {
-            if Path::new(Self::BOOT_LINK).exists() || fs::symlink_metadata(Self::BOOT_LINK).is_ok() {
-                let _ = fs::remove_file(Self::BOOT_LINK);
+            let boot_link = self.boot_link();
+            if Path::new(&boot_link).exists() || fs::symlink_metadata(&boot_link).is_ok() {
+                let _ = fs::remove_file(&boot_link);
             }
             #[cfg(unix)]
             {
-                let _ = std::os::unix::fs::symlink("../zapret-rust", Self::BOOT_LINK);
+                let _ = std::os::unix::fs::symlink(format!("../{}", self.name), &boot_link);
             }
         }
 
@@ -92,17 +103,16 @@ restart-delay = 5
     }
 
     fn uninstall(&self) -> Result<(), String> {
-        // Stop service first (ignore errors)
         let _ = self.run_dinitctl("stop");
 
-        // Remove boot.d symlink
-        if Path::new(Self::BOOT_LINK).exists() || fs::symlink_metadata(Self::BOOT_LINK).is_ok() {
-            let _ = fs::remove_file(Self::BOOT_LINK);
+        let boot_link = self.boot_link();
+        if Path::new(&boot_link).exists() || fs::symlink_metadata(&boot_link).is_ok() {
+            let _ = fs::remove_file(&boot_link);
         }
 
-        // Remove service file
-        if Path::new(Self::SERVICE_PATH).exists() {
-            fs::remove_file(Self::SERVICE_PATH).map_err(|e| format!("{}{}", rust_i18n::t!("err_rm_dinit"), e))?;
+        let service_path = self.service_path();
+        if Path::new(&service_path).exists() {
+            fs::remove_file(&service_path).map_err(|e| format!("{}{}", rust_i18n::t!("err_rm_dinit"), e))?;
         }
 
         Ok(())

@@ -2,7 +2,6 @@ use crate::firewalls::FirewallBackend;
 use std::io::Write;
 use std::time::Duration;
 
-/// TTL sweep range (DPI hop numbers are typically 3-20).
 pub const TTL_MIN: u8 = 1;
 pub const TTL_MAX: u8 = 20;
 
@@ -19,8 +18,6 @@ pub fn ttl_domains_file_path() -> std::path::PathBuf {
     crate::config::get_cache_dir().join(EXTRA_DOMAINS_FILE)
 }
 
-/// Create/refresh the TTL domain file with the built-in test domains so the
-/// user can add/remove domains freely.
 pub fn ensure_ttl_file() -> Result<(), String> {
     let path = ttl_domains_file_path();
     if path.exists() && !crate::autotune::load_domain_file(&path).is_empty() {
@@ -38,8 +35,6 @@ pub fn ensure_ttl_file() -> Result<(), String> {
     std::fs::write(&path, content).map_err(|e| format!("Cannot write '{}': {}", path.display(), e))
 }
 
-/// Test domains come entirely from `ttl_domains.txt`; if the file is missing or
-/// empty, the built-in defaults are used as a fallback.
 fn get_test_domains() -> Vec<String> {
     let from_file = crate::autotune::load_domain_file(&ttl_domains_file_path());
     if !from_file.is_empty() {
@@ -56,11 +51,6 @@ fn null_device() -> &'static str {
     }
 }
 
-/// Check that the domain is reachable over TLS 1.3.
-///
-/// `-k` skips certificate verification: the probe only checks that the TCP/TLS
-/// connection gets through the DPI, and `googlevideo.com` (apex of YouTube's
-/// video CDN) serves a wildcard cert that does not match the bare hostname.
 fn curl_tls_ok(domain: &str) -> bool {
     std::process::Command::new("curl")
         .arg("-s")
@@ -91,14 +81,11 @@ fn wait_for_nfqws(timeout: Duration) -> bool {
         std::thread::sleep(Duration::from_millis(200));
     }
     if running {
-        // Let the daemon bind its socket before probing.
         std::thread::sleep(Duration::from_millis(500));
     }
     running
 }
 
-/// Sweep TTL from 1 to 20, running winws with a fixed TTL each time and
-/// probing real domains. Returns the first (minimum) working TTL.
 pub fn autopick_ttl(strategy_file: &str, interface: &str, backend: &dyn FirewallBackend) -> Result<u8, String> {
     if crate::platform::is_nfqws_running() {
         return Err(rust_i18n::t!("ttl_err_running").into_owned());

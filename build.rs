@@ -33,7 +33,6 @@ fn main() {
         }
     }
 
-    // Keep nftables first so it remains the default (from_config fallback = all[0])
     backends.sort_by(|a, b| {
         if a == "nftables" {
             std::cmp::Ordering::Less

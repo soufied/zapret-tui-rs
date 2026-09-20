@@ -1,6 +1,6 @@
 use crate::autotune::PRESETS;
 use crate::tui::state::{AppState, AutotuneBlockChecksState, AutotuneMenuState, AutotuneProtocolsState};
-use crate::tui::theme::Theme;
+use crate::tui::theme::{toggle_marker, Theme};
 use ratatui::{
     style::{Color, Style},
     text::{Line, Span},
@@ -16,6 +16,9 @@ fn on_off(v: bool) -> &'static str {
 }
 
 pub fn render_config(app: &AppState) -> (Vec<ListItem<'static>>, String, usize) {
+    if app.engine.uses_presets() {
+        return render_config_zapret2(app);
+    }
     let mut items: Vec<ListItem<'static>> = Vec::new();
 
     let is_sel = app.autotune_menu == AutotuneMenuState::PresetSelection;
@@ -559,4 +562,201 @@ pub fn render_header() -> (Vec<ListItem<'static>>, String, usize) {
             .add_modifier(ratatui::style::Modifier::BOLD),
     )]))];
     (items, rust_i18n::t!("menu_autotune_title").into_owned(), 0)
+}
+
+fn menu_line(label: String, value: Option<String>, selected: bool) -> ListItem<'static> {
+    let item_style = if selected {
+        Theme::selected_item()
+    } else {
+        Theme::normal_item()
+    };
+    match value {
+        Some(value) => ListItem::new(Line::from(vec![
+            Span::styled(label, item_style),
+            Span::styled(
+                value,
+                if selected {
+                    Theme::selected_value()
+                } else {
+                    Theme::normal_value()
+                },
+            ),
+        ])),
+        None => ListItem::new(Line::from(vec![Span::styled(label, item_style)])),
+    }
+}
+
+pub fn render_config_zapret2(app: &AppState) -> (Vec<ListItem<'static>>, String, usize) {
+    let states = app.autotune_menu_states();
+    let mut items: Vec<ListItem<'static>> = Vec::new();
+    let mut selected_index = 0;
+    let (preset_count, target_count) = app.z2_planned_counts();
+
+    for (idx, state) in states.iter().enumerate() {
+        let selected = *state == app.autotune_menu;
+        if selected {
+            selected_index = idx;
+        }
+        let item = match state {
+            AutotuneMenuState::Z2Bundle => menu_line(
+                format!(" {}: ", rust_i18n::t!("menu_autotune_z2_bundle")),
+                Some(format!("‹ {} ›", app.z2_bundle.label())),
+                selected,
+            ),
+            AutotuneMenuState::Z2Targets => {
+                let lists = app.resolved_z2_lists();
+                let label = if lists.is_empty() {
+                    format!(
+                        "{} ({})",
+                        rust_i18n::t!("autotune_z2_default_targets"),
+                        target_count
+                    )
+                } else {
+                    format!("{} · {} {}", app.z2_bundle_summary(), target_count, rust_i18n::t!("autotune_z2_domains_suffix"))
+                };
+                menu_line(
+                    format!(" {}: ", rust_i18n::t!("menu_autotune_z2_targets")),
+                    Some(format!("‹ {} ›", label)),
+                    selected,
+                )
+            }
+            AutotuneMenuState::Z2Presets => {
+                let label = if app.z2_selected_presets.is_empty() {
+                    format!("{} ({})", rust_i18n::t!("autotune_z2_all_presets"), preset_count)
+                } else {
+                    format!(
+                        "{} / {}",
+                        app.z2_selected_presets.len(),
+                        app.z2_presets.len().max(preset_count)
+                    )
+                };
+                menu_line(
+                    format!(" {}: ", rust_i18n::t!("menu_autotune_z2_presets")),
+                    Some(format!("‹ {} ›", label)),
+                    selected,
+                )
+            }
+            AutotuneMenuState::Results => {
+                let label = if app.has_autotune_results_file {
+                    format!("‹ {} ›", rust_i18n::t!("menu_autotune_view"))
+                } else {
+                    rust_i18n::t!("menu_autotune_no_results").into_owned()
+                };
+                menu_line(
+                    format!(" {}: ", rust_i18n::t!("menu_autotune_results")),
+                    Some(label),
+                    selected,
+                )
+            }
+            AutotuneMenuState::Run => menu_line(
+                format!(
+                    " {}  ({} x {})",
+                    rust_i18n::t!("menu_autotune_run"),
+                    preset_count,
+                    target_count
+                ),
+                None,
+                selected,
+            ),
+            _ => menu_line(format!(" {}", rust_i18n::t!("menu_autotune_back")), None, selected),
+        };
+        items.push(item);
+    }
+
+    let mut preview: Vec<String> = app.z2_targets.iter().take(6).cloned().collect();
+    if app.z2_targets.len() > preview.len() {
+        preview.push(format!("+{}", app.z2_targets.len() - preview.len()));
+    }
+    if !preview.is_empty() {
+        items.push(ListItem::new(Line::from(vec![
+            Span::styled(
+                format!("   {}: ", rust_i18n::t!("autotune_z2_targets_used")),
+                Theme::dim_item(),
+            ),
+            Span::styled(preview.join(", "), Theme::hint()),
+        ])));
+    }
+
+    (
+        items,
+        rust_i18n::t!("menu_autotune_z2_title").into_owned(),
+        selected_index,
+    )
+}
+
+fn render_toggle_list(
+    entries: &[String],
+    selected: &[usize],
+    cursor: usize,
+    title: String,
+) -> (Vec<ListItem<'static>>, String, usize) {
+    let mut items: Vec<ListItem<'static>> = Vec::new();
+    let mut selected_index = 0;
+
+    for (idx, name) in entries.iter().enumerate() {
+        let sel = idx == cursor;
+        if sel {
+            selected_index = idx;
+        }
+        let is_on = selected.contains(&idx);
+        let toggle_style = if is_on {
+            Theme::active_value()
+        } else {
+            Theme::dim_item()
+        };
+        items.push(ListItem::new(Line::from(vec![
+            Span::styled(
+                if sel { "▸ " } else { "  " },
+                if sel {
+                    Theme::selected_item()
+                } else {
+                    Theme::normal_item()
+                },
+            ),
+            Span::styled(
+                toggle_marker(is_on),
+                if sel { Theme::selected_value() } else { toggle_style },
+            ),
+            Span::styled(
+                format!(" {}", name),
+                if sel {
+                    Theme::selected_item()
+                } else {
+                    Theme::normal_item()
+                },
+            ),
+        ])));
+    }
+
+    let sel_back = cursor >= entries.len();
+    if sel_back {
+        selected_index = entries.len();
+    }
+    items.push(
+        ListItem::new(format!(" {}", rust_i18n::t!("menu_autotune_back"))).style(if sel_back {
+            Theme::selected_item()
+        } else {
+            Theme::normal_item()
+        }),
+    );
+
+    (items, title, selected_index)
+}
+
+pub fn render_z2_presets(app: &AppState) -> (Vec<ListItem<'static>>, String, usize) {
+    render_toggle_list(
+        &app.z2_presets,
+        &app.z2_selected_presets,
+        app.z2_preset_index,
+        rust_i18n::t!("tui_title_autotune_z2_presets").into_owned(),
+    )
+}
+
+pub fn render_z2_targets(app: &AppState) -> (Vec<ListItem<'static>>, String, usize) {
+    render_toggle_list(
+        &app.z2_lists,
+        &app.z2_selected_lists,
+        app.z2_list_index,
+        rust_i18n::t!("tui_title_autotune_z2_targets").into_owned(),
+    )
 }

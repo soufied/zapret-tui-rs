@@ -72,6 +72,9 @@ impl FirewallBackend for IptablesBackend {
 
         println!("{}", rust_i18n::t!("msg_setup_iptables"));
 
+        let qnum = crate::firewalls::NFQUEUE_NUM.to_string();
+        let mark = crate::firewalls::FWMARK_MASK;
+
         let _ = Command::new("iptables")
             .args(["-t", "mangle", "-N", CHAIN_POST])
             .stderr(Stdio::null())
@@ -104,8 +107,8 @@ impl FirewallBackend for IptablesBackend {
                 "-p", "tcp",
                 "-m", "multiport", "--dports", &ports,
                 "-m", "connbytes", "--connbytes-dir=original", "--connbytes-mode=packets", "--connbytes", "1:6",
-                "-m", "mark", "!", "--mark", "0x40000000/0x40000000",
-                "-j", "NFQUEUE", "--queue-num", "200", "--queue-bypass",
+                "-m", "mark", "!", "--mark", mark,
+                "-j", "NFQUEUE", "--queue-num", &qnum, "--queue-bypass",
             ]);
             Command::new("iptables").args(&args).stderr(Stdio::null()).status().ok();
 
@@ -117,8 +120,8 @@ impl FirewallBackend for IptablesBackend {
                 "-p", "tcp",
                 "-m", "multiport", "--sports", &ports,
                 "-m", "connbytes", "--connbytes-dir=reply", "--connbytes-mode=packets", "--connbytes", "1:3",
-                "-m", "mark", "!", "--mark", "0x40000000/0x40000000",
-                "-j", "NFQUEUE", "--queue-num", "200", "--queue-bypass",
+                "-m", "mark", "!", "--mark", mark,
+                "-j", "NFQUEUE", "--queue-num", &qnum, "--queue-bypass",
             ]);
             Command::new("iptables").args(&pre_args).stderr(Stdio::null()).status().ok();
         }
@@ -134,8 +137,8 @@ impl FirewallBackend for IptablesBackend {
                 "-p", "udp",
                 "-m", "multiport", "--dports", &ports,
                 "-m", "connbytes", "--connbytes-dir=original", "--connbytes-mode=packets", "--connbytes", "1:6",
-                "-m", "mark", "!", "--mark", "0x40000000/0x40000000",
-                "-j", "NFQUEUE", "--queue-num", "200", "--queue-bypass",
+                "-m", "mark", "!", "--mark", mark,
+                "-j", "NFQUEUE", "--queue-num", &qnum, "--queue-bypass",
             ]);
             Command::new("iptables").args(&args).stderr(Stdio::null()).status().ok();
         }

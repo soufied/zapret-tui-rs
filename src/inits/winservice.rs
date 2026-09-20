@@ -6,7 +6,6 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread;
 use std::time::Duration;
 
-// We will use standard windows-service API when compiling on Windows
 use windows_service::{
     define_windows_service,
     service::{
@@ -89,7 +88,6 @@ impl ServiceManager for WindowsServiceManager {
     }
 
     fn uninstall(&self) -> Result<(), String> {
-        // Stop service first (ignore errors)
         let _ = self.stop();
         self.open_service(ServiceAccess::DELETE)?
             .delete()
@@ -101,7 +99,7 @@ impl ServiceManager for WindowsServiceManager {
         let svc = self.open_service(ServiceAccess::START | ServiceAccess::QUERY_STATUS)?;
         svc.start(&[] as &[&str])
             .map_err(|e| format!("{}{}", rust_i18n::t!("err_service"), e))?;
-        // Wait until the service actually reports RUNNING (like `sc start` did).
+
         for _ in 0..50 {
             if let Ok(status) = svc.query_status() {
                 match status.current_state {
@@ -121,7 +119,7 @@ impl ServiceManager for WindowsServiceManager {
         let svc = self.open_service(ServiceAccess::STOP | ServiceAccess::QUERY_STATUS)?;
         svc.stop()
             .map_err(|e| format!("{}{}", rust_i18n::t!("err_service"), e))?;
-        // `stop` returns as soon as the control is accepted; wait until fully stopped.
+
         for _ in 0..50 {
             match svc.query_status() {
                 Ok(status) if status.current_state == ServiceState::Stopped => return Ok(()),
@@ -138,7 +136,6 @@ impl ServiceManager for WindowsServiceManager {
     }
 }
 
-// Windows Service Runtime Implementation
 static RUNNING: AtomicBool = AtomicBool::new(true);
 
 define_windows_service!(ffi_service_main, my_service_main);
@@ -166,7 +163,6 @@ fn my_service_main(_arguments: Vec<std::ffi::OsString>) {
         Err(_) => return,
     };
 
-    // Report Running state
     let _ = status_handle.set_service_status(ServiceStatus {
         service_type: ServiceType::OWN_PROCESS,
         current_state: ServiceState::Running,
@@ -177,7 +173,6 @@ fn my_service_main(_arguments: Vec<std::ffi::OsString>) {
         process_id: None,
     });
 
-    // Parse options from standard arguments (since binPath arguments are passed to the process)
     let args: Vec<String> = std::env::args().collect();
     let mut config_path = None;
     let mut cache_dir = None;
@@ -202,7 +197,6 @@ fn my_service_main(_arguments: Vec<std::ffi::OsString>) {
         std::env::set_var("ZAPRET_CACHE_DIR", d);
     }
 
-    // Load Configuration
     let cfg = match crate::config::load_config(&config_file) {
         Ok(c) => c,
         Err(_) => {
@@ -211,7 +205,6 @@ fn my_service_main(_arguments: Vec<std::ffi::OsString>) {
         }
     };
 
-    // Run Zapret background loop
     let backend = crate::firewalls::windivert::WinDivertBackend;
 
     crate::runner::run_zapret(
@@ -222,12 +215,10 @@ fn my_service_main(_arguments: Vec<std::ffi::OsString>) {
         &backend,
     );
 
-    // Main service loop
     while RUNNING.load(Ordering::SeqCst) {
         thread::sleep(Duration::from_millis(100));
     }
 
-    // Cleanup and stop
     let _ = status_handle.set_service_status(ServiceStatus {
         service_type: ServiceType::OWN_PROCESS,
         current_state: ServiceState::StopPending,
