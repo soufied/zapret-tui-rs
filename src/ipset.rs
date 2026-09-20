@@ -1,5 +1,7 @@
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
+
+pub const IPSET_ALL_FILE: &str = "ipset-all.txt";
 
 #[derive(PartialEq, Clone, Copy, Debug)]
 pub enum IpsetMode {
@@ -22,11 +24,17 @@ impl std::fmt::Display for IpsetMode {
 }
 
 pub fn get_ipset_dir() -> PathBuf {
+    let engine = crate::runner::active_engine();
     let exe_dir = std::env::current_exe()
         .map(|p| p.parent().unwrap().to_path_buf())
         .unwrap_or_else(|_| std::env::current_dir().unwrap_or_default());
 
-    let base_dir = exe_dir.join("zapret-discord-youtube-linux");
+    let workspace = engine.workspace_dir();
+    let base_dir = if workspace.exists() {
+        workspace
+    } else {
+        exe_dir.join(engine.workspace_folder())
+    };
     let lists_dir = base_dir.join("lists");
 
     if lists_dir.exists() && lists_dir.is_dir() {
@@ -34,19 +42,18 @@ pub fn get_ipset_dir() -> PathBuf {
     } else if base_dir.exists() && base_dir.is_dir() {
         base_dir
     } else {
-        // Fallback to current directory dev mode
-        let local_base = Path::new("zapret-discord-youtube-linux");
+        let local_base = PathBuf::from(engine.workspace_folder());
         let local_lists = local_base.join("lists");
         if local_lists.exists() && local_lists.is_dir() {
             local_lists
         } else {
-            local_base.to_path_buf()
+            local_base
         }
     }
 }
 
 pub fn get_ipset_all_path() -> PathBuf {
-    get_ipset_dir().join("ipset-all.txt")
+    get_ipset_dir().join(IPSET_ALL_FILE)
 }
 
 pub fn get_ipset_backup_path() -> PathBuf {
@@ -60,8 +67,6 @@ pub fn get_ipset_custom_path() -> PathBuf {
 pub fn determine_current_mode() -> IpsetMode {
     let path = get_ipset_all_path();
     if !path.exists() {
-        // If file doesn't exist, we can treat it as Any (empty) or Custom.
-        // Let's treat it as Any since it's effectively empty.
         return IpsetMode::Any;
     }
 
@@ -109,7 +114,6 @@ pub fn apply_ipset_mode(old_mode: IpsetMode, new_mode: IpsetMode) {
         let _ = fs::create_dir_all(&dir);
     }
 
-    // Save custom mode if leaving it
     if old_mode == IpsetMode::Custom && new_mode != IpsetMode::Custom && path.exists() {
         let custom_path = get_ipset_custom_path();
         let _ = fs::copy(&path, &custom_path);

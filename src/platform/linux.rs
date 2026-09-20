@@ -2,8 +2,6 @@
 
 use std::os::unix::process::CommandExt;
 
-/// Ensures that the current process is running with root privileges.
-/// If not, it attempts to escalate privileges using pkexec or sudo.
 pub fn ensure_admin() {
     let not_root = std::process::Command::new("id")
         .arg("-u")
@@ -16,14 +14,11 @@ pub fn ensure_admin() {
     if not_root {
         println!("{}", rust_i18n::t!("root_req"));
 
-        // Try pkexec first via exec().
-        // exec() replaces the current process. It only returns if it fails to start the binary.
         let _err1 = std::process::Command::new("pkexec")
             .arg(std::env::current_exe().unwrap_or_default())
             .args(std::env::args().skip(1))
             .exec();
 
-        // If we reach here, pkexec is not installed or failed to execute. Fall back to sudo.
         let err2 = std::process::Command::new("sudo")
             .arg(std::env::current_exe().unwrap_or_default())
             .args(std::env::args().skip(1))
@@ -35,10 +30,12 @@ pub fn ensure_admin() {
 }
 
 pub fn is_nfqws_running() -> bool {
-    std::process::Command::new("pgrep")
-        .arg("-x")
-        .arg("nfqws")
-        .output()
-        .map(|o| o.status.success())
-        .unwrap_or(false)
+    ["nfqws", "nfqws2"].iter().any(|name| {
+        std::process::Command::new("pgrep")
+            .arg("-x")
+            .arg(name)
+            .output()
+            .map(|o| o.status.success())
+            .unwrap_or(false)
+    })
 }

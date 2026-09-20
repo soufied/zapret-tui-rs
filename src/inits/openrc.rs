@@ -3,15 +3,22 @@ use std::fs;
 use std::path::Path;
 use std::process::Command;
 
-pub struct OpenRcManager;
+pub struct OpenRcManager {
+    name: &'static str,
+}
 
 impl OpenRcManager {
-    const SERVICE_NAME: &'static str = "zapret-rust";
-    const SCRIPT_PATH: &'static str = "/etc/init.d/zapret-rust";
+    pub fn new(name: &'static str) -> Self {
+        Self { name }
+    }
+
+    fn script_path(&self) -> String {
+        format!("/etc/init.d/{}", self.name)
+    }
 
     fn run_rc_service(&self, action: &str) -> Result<(), String> {
         let output = Command::new("rc-service")
-            .arg(Self::SERVICE_NAME)
+            .arg(self.name)
             .arg(action)
             .output()
             .map_err(|e| format!("{}{}", rust_i18n::t!("err_exec_rc_svc"), e))?;
@@ -21,7 +28,7 @@ impl OpenRcManager {
             let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
             Err(format!(
                 "rc-service {} {} failed: {}",
-                Self::SERVICE_NAME,
+                self.name,
                 action,
                 if stderr.is_empty() {
                     format!("exit code {:?}", output.status.code())
@@ -35,7 +42,7 @@ impl OpenRcManager {
     fn run_rc_update(&self, action: &str, runlevel: &str) -> Result<(), String> {
         let output = Command::new("rc-update")
             .arg(action)
-            .arg(Self::SERVICE_NAME)
+            .arg(self.name)
             .arg(runlevel)
             .output()
             .map_err(|e| format!("{}{}", rust_i18n::t!("err_exec_rc_update"), e))?;
@@ -46,7 +53,7 @@ impl OpenRcManager {
             Err(format!(
                 "rc-update {} {} {} failed: {}",
                 action,
-                Self::SERVICE_NAME,
+                self.name,
                 runlevel,
                 if stderr.is_empty() {
                     format!("exit code {:?}", output.status.code())
@@ -60,14 +67,11 @@ impl OpenRcManager {
 
 impl ServiceManager for OpenRcManager {
     fn is_installed(&self) -> bool {
-        Path::new(Self::SCRIPT_PATH).exists()
+        Path::new(&self.script_path()).exists()
     }
 
     fn is_active(&self) -> bool {
-        let output = Command::new("rc-service")
-            .arg(Self::SERVICE_NAME)
-            .arg("status")
-            .output();
+        let output = Command::new("rc-service").arg(self.name).arg("status").output();
         match output {
             Ok(out) => out.status.success(),
             Err(_) => false,
@@ -86,7 +90,7 @@ impl ServiceManager for OpenRcManager {
         let script_content = format!(
             r#"#!/sbin/openrc-run
 
-description="Zapret Discord Youtube Service"
+description="{}"
 supervisor="supervise-daemon"
 respawn_delay=5
 respawn_max=10
@@ -99,17 +103,21 @@ depend() {{
     after firewall
 }}
 "#,
-            exe_str, config_str, cache_str
+            crate::inits::service_description(self.name),
+            exe_str,
+            config_str,
+            cache_str
         );
 
-        fs::write(Self::SCRIPT_PATH, script_content)
+        let script_path = self.script_path();
+        fs::write(&script_path, script_content)
             .map_err(|e| format!("{}{}", rust_i18n::t!("err_write_openrc"), e))?;
 
         #[cfg(unix)]
         {
             {
                 use std::os::unix::fs::PermissionsExt;
-                fs::set_permissions(Self::SCRIPT_PATH, fs::Permissions::from_mode(0o755))
+                fs::set_permissions(&script_path, fs::Permissions::from_mode(0o755))
                     .map_err(|e| format!("{}{}", rust_i18n::t!("err_chmod_openrc"), e))?;
             }
         }
@@ -120,12 +128,12 @@ depend() {{
     }
 
     fn uninstall(&self) -> Result<(), String> {
-        // Stop service first (ignore errors)
         let _ = self.run_rc_service("stop");
         let _ = self.run_rc_update("del", "default");
 
-        if Path::new(Self::SCRIPT_PATH).exists() {
-            fs::remove_file(Self::SCRIPT_PATH).map_err(|e| format!("{}{}", rust_i18n::t!("err_rm_openrc"), e))?;
+        let script_path = self.script_path();
+        if Path::new(&script_path).exists() {
+            fs::remove_file(&script_path).map_err(|e| format!("{}{}", rust_i18n::t!("err_rm_openrc"), e))?;
         }
 
         Ok(())

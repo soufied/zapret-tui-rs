@@ -225,7 +225,6 @@ pub fn check_domain(config: &AutotuneConfig, domain: &str) -> DomainCheckResult 
         )
     };
 
-    // Baseline TLS 1.3 test: real TLS handshake + HTTP request
     let baseline_pass = if alive == CheckStatus::Pass {
         test_tls(domain, "--tlsv1.3", config.num_requests)
     } else {

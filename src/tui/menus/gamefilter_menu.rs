@@ -13,7 +13,6 @@ pub fn render(app: &AppState) -> (Vec<ListItem<'static>>, String, usize) {
     let on_label = rust_i18n::t!("val_on");
     let off_label = rust_i18n::t!("val_off");
 
-    // TCP Gamefilter option
     {
         let is_sel = app.gamefilter_menu == GamefilterMenuState::Tcp;
         if is_sel {
@@ -71,7 +70,6 @@ pub fn render(app: &AppState) -> (Vec<ListItem<'static>>, String, usize) {
         index += 1;
     }
 
-    // UDP Gamefilter option
     {
         let is_sel = app.gamefilter_menu == GamefilterMenuState::Udp;
         if is_sel {
@@ -129,7 +127,6 @@ pub fn render(app: &AppState) -> (Vec<ListItem<'static>>, String, usize) {
         index += 1;
     }
 
-    // Back option
     {
         let is_sel = app.gamefilter_menu == GamefilterMenuState::Back;
         if is_sel {

@@ -83,11 +83,11 @@ impl FirewallBackend for NftablesBackend {
 
         if !tcp_ports.is_empty() {
             let mut exprs = vec![
-                json!({ "match": { "op": "!=", "left": { "meta": { "key": "mark" } }, "right": "0x40000000" } }),
+                json!({ "match": { "op": "!=", "left": { "meta": { "key": "mark" } }, "right": crate::firewalls::FWMARK_HEX } }),
                 json!({ "match": { "op": "==", "left": { "payload": { "protocol": "tcp", "field": "dport" } }, "right": { "set": parse_ports(tcp_ports) } } }),
                 json!({ "match": { "op": "==", "left": { "ct": { "key": "packets", "dir": "original" } }, "right": { "range": [1, 6] } } }),
                 json!({ "counter": null }),
-                json!({ "queue": { "num": 200, "bypass": true } })
+                json!({ "queue": { "num": crate::firewalls::NFQUEUE_NUM, "flags": ["bypass"] } })
             ];
 
             if !interface.is_empty() && interface != "any" {
@@ -110,7 +110,7 @@ impl FirewallBackend for NftablesBackend {
                 json!({ "match": { "op": "==", "left": { "payload": { "protocol": "tcp", "field": "sport" } }, "right": { "set": parse_ports(tcp_ports) } } }),
                 json!({ "match": { "op": "==", "left": { "ct": { "key": "packets", "dir": "reply" } }, "right": { "range": [1, 3] } } }),
                 json!({ "counter": null }),
-                json!({ "queue": { "num": 200, "bypass": true } })
+                json!({ "queue": { "num": crate::firewalls::NFQUEUE_NUM, "flags": ["bypass"] } })
             ];
 
             rules.push(json!({
@@ -128,11 +128,11 @@ impl FirewallBackend for NftablesBackend {
 
         if !udp_ports.is_empty() {
             let mut exprs = vec![
-                json!({ "match": { "op": "!=", "left": { "meta": { "key": "mark" } }, "right": "0x40000000" } }),
+                json!({ "match": { "op": "!=", "left": { "meta": { "key": "mark" } }, "right": crate::firewalls::FWMARK_HEX } }),
                 json!({ "match": { "op": "==", "left": { "payload": { "protocol": "udp", "field": "dport" } }, "right": { "set": parse_ports(udp_ports) } } }),
                 json!({ "match": { "op": "==", "left": { "ct": { "key": "packets", "dir": "original" } }, "right": { "range": [1, 6] } } }),
                 json!({ "counter": null }),
-                json!({ "queue": { "num": 200, "bypass": true } })
+                json!({ "queue": { "num": crate::firewalls::NFQUEUE_NUM, "flags": ["bypass"] } })
             ];
 
             if !interface.is_empty() && interface != "any" {

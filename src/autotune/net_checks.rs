@@ -328,8 +328,6 @@ pub fn check_siberian_block() -> CheckResult {
 }
 
 pub fn check_quic_block() -> CheckResult {
-    // First verify general UDP connectivity so a broken link isn't reported
-    // as a QUIC block.
     match UdpSocket::bind("0.0.0.0:0") {
         Ok(sock) => {
             let clean_ip: IpAddr = "8.8.8.8".parse().unwrap();

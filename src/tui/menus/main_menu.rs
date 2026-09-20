@@ -5,340 +5,209 @@ use ratatui::{
     widgets::ListItem,
 };
 
-pub fn render(app: &AppState) -> (Vec<ListItem<'static>>, String, usize) {
-    let mut selected_index = 0;
-    let mut items = vec![];
-    let mut index = 0;
+const LABEL_WIDTH: usize = 28;
 
-    #[cfg(target_os = "windows")]
-    {
-        let is_sel = app.main_menu == MainMenuState::DefenderSettings;
-        if is_sel {
-            selected_index = index;
+struct Builder {
+    items: Vec<ListItem<'static>>,
+    index: usize,
+    selected_index: usize,
+}
+
+impl Builder {
+    fn new() -> Self {
+        Self {
+            items: Vec::new(),
+            index: 0,
+            selected_index: 0,
         }
-        items.push(
-            ListItem::new(format!(" {}", rust_i18n::t!("menu_main_defender"))).style(if is_sel {
-                Theme::selected_item()
-            } else {
-                Theme::normal_item()
-            }),
-        );
-        index += 1;
     }
 
-    // DownloadDeps
-    {
-        let is_sel = app.main_menu == MainMenuState::DownloadDeps;
-        if is_sel {
-            selected_index = index;
+    fn push(&mut self, selected: bool, label: String, value: Option<String>) {
+        if selected {
+            self.selected_index = self.index;
         }
-        items.push(
-            ListItem::new(format!(" {}", rust_i18n::t!("menu_main_downloader"))).style(if is_sel {
-                Theme::selected_item()
-            } else {
-                Theme::normal_item()
-            }),
-        );
-        index += 1;
-    }
+        self.index += 1;
 
-    // Interface
-    {
-        let is_sel = app.main_menu == MainMenuState::Interface;
-        if is_sel {
-            selected_index = index;
-        }
-        let val = app
-            .interfaces
-            .get(app.selected_interface)
-            .unwrap_or(&String::new())
-            .clone();
-        let spans = vec![
-            Span::styled(
-                format!(" {}: ", rust_i18n::t!("menu_main_interface")),
-                if is_sel {
-                    Theme::selected_item()
-                } else {
-                    Theme::normal_item()
-                },
-            ),
-            Span::styled(
-                format!("< {} >", val),
-                if is_sel {
-                    Theme::selected_value()
-                } else {
-                    Theme::normal_value()
-                },
-            ),
-        ];
-        items.push(ListItem::new(Line::from(spans)));
-        index += 1;
-    }
-
-    // Strategy
-    {
-        let is_sel = app.main_menu == MainMenuState::Strategy;
-        if is_sel {
-            selected_index = index;
-        }
-        let val = app
-            .strategies
-            .get(app.selected_strategy)
-            .unwrap_or(&String::new())
-            .clone();
-        let spans = vec![
-            Span::styled(
-                format!(" {}: ", rust_i18n::t!("menu_main_strategy")),
-                if is_sel {
-                    Theme::selected_item()
-                } else {
-                    Theme::normal_item()
-                },
-            ),
-            Span::styled(
-                format!("< {} >", val),
-                if is_sel {
-                    Theme::selected_value()
-                } else {
-                    Theme::normal_value()
-                },
-            ),
-        ];
-        items.push(ListItem::new(Line::from(spans)));
-        index += 1;
-    }
-
-    // GamefilterSettings
-    {
-        let is_sel = app.main_menu == MainMenuState::GamefilterSettings;
-        if is_sel {
-            selected_index = index;
-        }
+        let marker = if selected { "▸ " } else { "  " };
+        let label_style = if selected {
+            Theme::selected_item()
+        } else {
+            Theme::normal_item()
+        };
 
         let mut spans = vec![Span::styled(
-            format!(" {}: ", rust_i18n::t!("menu_main_gamefilter")),
-            if is_sel {
-                Theme::selected_item()
-            } else {
-                Theme::normal_item()
-            },
+            format!("{}{:<width$}", marker, label, width = LABEL_WIDTH),
+            label_style,
         )];
 
-        let mut status_parts = vec![];
-        if app.tcp_gamefilter {
-            status_parts.push("TCP");
+        if let Some(value) = value {
+            spans.push(Span::raw(" "));
+            spans.push(Span::styled(
+                format!("‹ {} ›", value),
+                if selected {
+                    Theme::selected_value()
+                } else {
+                    Theme::normal_value()
+                },
+            ));
         }
-        if app.udp_gamefilter {
-            status_parts.push("UDP");
-        }
-        let status_str = if status_parts.is_empty() {
-            rust_i18n::t!("val_off").into_owned()
-        } else {
-            status_parts.join("+")
-        };
 
-        spans.push(Span::styled(
-            format!("< {} >", status_str),
-            if is_sel {
-                Theme::selected_value()
-            } else {
-                Theme::normal_value()
-            },
-        ));
-
-        items.push(ListItem::new(Line::from(spans)));
-        index += 1;
+        self.items.push(ListItem::new(Line::from(spans)));
     }
 
-    // Backend (Linux only)
+    fn separator(&mut self) {
+        self.index += 1;
+        self.items.push(ListItem::new(Line::from(Span::styled(
+            "  ───────────────────────────────────────",
+            Theme::dim_item(),
+        ))));
+    }
+}
+
+pub fn render(app: &AppState) -> (Vec<ListItem<'static>>, String, usize) {
+    let mut b = Builder::new();
+
+    #[cfg(target_os = "windows")]
+    b.push(
+        app.main_menu == MainMenuState::DefenderSettings,
+        rust_i18n::t!("menu_main_defender").into_owned(),
+        None,
+    );
+
+    b.push(
+        app.main_menu == MainMenuState::DownloadDeps,
+        rust_i18n::t!("menu_main_downloader").into_owned(),
+        None,
+    );
+
+    b.separator();
+
+    b.push(
+        app.main_menu == MainMenuState::Engine,
+        rust_i18n::t!("menu_main_engine").into_owned(),
+        Some(app.engine.to_string()),
+    );
+
+    b.push(
+        app.main_menu == MainMenuState::Interface,
+        rust_i18n::t!("menu_main_interface").into_owned(),
+        Some(
+            app.interfaces
+                .get(app.selected_interface)
+                .cloned()
+                .unwrap_or_else(|| "any".to_string()),
+        ),
+    );
+
+    b.push(
+        app.main_menu == MainMenuState::Strategy,
+        rust_i18n::t!("menu_main_strategy").into_owned(),
+        Some(
+            app.strategies
+                .get(app.selected_strategy)
+                .cloned()
+                .unwrap_or_else(|| rust_i18n::t!("val_none").into_owned()),
+        ),
+    );
+
+    if app.engine.supports_game_filter() {
+        let gamefilter = {
+            let mut parts: Vec<&str> = Vec::new();
+            if app.tcp_gamefilter {
+                parts.push("TCP");
+            }
+            if app.udp_gamefilter {
+                parts.push("UDP");
+            }
+            if parts.is_empty() {
+                rust_i18n::t!("val_off").into_owned()
+            } else {
+                parts.join("+")
+            }
+        };
+        b.push(
+            app.main_menu == MainMenuState::GamefilterSettings,
+            rust_i18n::t!("menu_main_gamefilter").into_owned(),
+            Some(gamefilter),
+        );
+    }
+
     #[cfg(target_os = "linux")]
-    {
-        let is_sel = app.main_menu == MainMenuState::BackendSettings;
-        if is_sel {
-            selected_index = index;
-        }
-        let val = app.selected_backend.to_string();
-        let spans = vec![
-            Span::styled(
-                format!(" {}: ", rust_i18n::t!("menu_main_backend")),
-                if is_sel {
-                    Theme::selected_item()
-                } else {
-                    Theme::normal_item()
-                },
-            ),
-            Span::styled(
-                format!("< {} >", val),
-                if is_sel {
-                    Theme::selected_value()
-                } else {
-                    Theme::normal_value()
-                },
-            ),
-        ];
-        items.push(ListItem::new(Line::from(spans)));
-        index += 1;
-    }
+    b.push(
+        app.main_menu == MainMenuState::BackendSettings,
+        rust_i18n::t!("menu_main_backend").into_owned(),
+        Some(app.selected_backend.to_string()),
+    );
 
-    // Ipset Mode
-    {
-        let is_sel = app.main_menu == MainMenuState::IpsetMode;
-        if is_sel {
-            selected_index = index;
-        }
-        let val = if let Some(mode) = app.available_ipset_modes.get(app.selected_ipset_mode) {
-            mode.to_string()
-        } else {
-            rust_i18n::t!("val_none").into_owned()
-        };
-        let spans = vec![
-            Span::styled(
-                format!(" {}: ", rust_i18n::t!("menu_main_ipset")),
-                if is_sel {
-                    Theme::selected_item()
-                } else {
-                    Theme::normal_item()
-                },
-            ),
-            Span::styled(
-                format!("< {} >", val),
-                if is_sel {
-                    Theme::selected_value()
-                } else {
-                    Theme::normal_value()
-                },
-            ),
-        ];
-        items.push(ListItem::new(Line::from(spans)));
-        index += 1;
-    }
+    b.push(
+        app.main_menu == MainMenuState::IpsetMode,
+        rust_i18n::t!("menu_main_ipset").into_owned(),
+        Some(
+            app.available_ipset_modes
+                .get(app.selected_ipset_mode)
+                .map(|m| m.to_string())
+                .unwrap_or_else(|| rust_i18n::t!("val_none").into_owned()),
+        ),
+    );
 
-    // ListsEditor
-    {
-        let is_sel = app.main_menu == MainMenuState::ListsEditor;
-        if is_sel {
-            selected_index = index;
-        }
-        items.push(
-            ListItem::new(format!(" {}", rust_i18n::t!("menu_main_lists"))).style(if is_sel {
-                Theme::selected_item()
-            } else {
-                Theme::normal_item()
-            }),
-        );
-        index += 1;
-    }
-
-    // Autotune
-    {
-        let is_sel = app.main_menu == MainMenuState::Autotune;
-        if is_sel {
-            selected_index = index;
-        }
-        items.push(
-            ListItem::new(format!(" {}", rust_i18n::t!("menu_main_autotune"))).style(if is_sel {
-                Theme::selected_item()
-            } else {
-                Theme::normal_item()
-            }),
-        );
-        index += 1;
-    }
-
-    // TtlAutopick
-    {
-        let is_sel = app.main_menu == MainMenuState::TtlAutopick;
-        if is_sel {
-            selected_index = index;
-        }
-        let ttl = app.dpi_desync_ttl;
-        let val = match ttl {
+    b.push(
+        app.main_menu == MainMenuState::TtlAutopick,
+        rust_i18n::t!("menu_main_ttl").into_owned(),
+        Some(match app.dpi_desync_ttl {
             Some(n) => n.to_string(),
             None => rust_i18n::t!("ttl_auto").into_owned(),
-        };
-        let spans = vec![
-            Span::styled(
-                format!(" {}: ", rust_i18n::t!("menu_main_ttl")),
-                if is_sel {
-                    Theme::selected_item()
-                } else {
-                    Theme::normal_item()
-                },
-            ),
-            Span::styled(
-                format!("< {} >", val),
-                if is_sel {
-                    Theme::selected_value()
-                } else {
-                    Theme::normal_value()
-                },
-            ),
-        ];
-        items.push(ListItem::new(Line::from(spans)));
-        index += 1;
-    }
+        }),
+    );
 
-    // FakesSettings
-    {
-        let is_sel = app.main_menu == MainMenuState::FakesSettings;
-        if is_sel {
-            selected_index = index;
-        }
-        items.push(
-            ListItem::new(format!(" {}", rust_i18n::t!("menu_main_fakes"))).style(if is_sel {
-                Theme::selected_item()
-            } else {
-                Theme::normal_item()
-            }),
-        );
-        index += 1;
-    }
+    b.separator();
 
-    // ServiceSettings
-    {
-        let is_sel = app.main_menu == MainMenuState::ServiceSettings;
-        if is_sel {
-            selected_index = index;
-        }
-        items.push(
-            ListItem::new(format!(" {}", rust_i18n::t!("menu_main_service"))).style(if is_sel {
-                Theme::selected_item()
-            } else {
-                Theme::normal_item()
-            }),
-        );
-        index += 1;
-    }
-    // Run
-    {
-        let is_sel = app.main_menu == MainMenuState::Run;
-        if is_sel {
-            selected_index = index;
-        }
-        items.push(
-            ListItem::new(format!(" {}", rust_i18n::t!("menu_main_run"))).style(if is_sel {
-                Theme::selected_item()
-            } else {
-                Theme::normal_item()
-            }),
-        );
-        index += 1;
-    }
+    b.push(
+        app.main_menu == MainMenuState::ListsEditor,
+        rust_i18n::t!("menu_main_lists").into_owned(),
+        None,
+    );
 
-    // Quit
-    {
-        let is_sel = app.main_menu == MainMenuState::Quit;
-        if is_sel {
-            selected_index = index;
-        }
-        items.push(
-            ListItem::new(format!(" {}", rust_i18n::t!("menu_main_quit"))).style(if is_sel {
-                Theme::selected_item()
-            } else {
-                Theme::normal_item()
-            }),
-        );
-    }
+    b.push(
+        app.main_menu == MainMenuState::Autotune,
+        rust_i18n::t!("menu_main_autotune").into_owned(),
+        None,
+    );
 
-    (items, rust_i18n::t!("menu_main_title").into_owned(), selected_index)
+    b.push(
+        app.main_menu == MainMenuState::FakesSettings,
+        rust_i18n::t!("menu_main_fakes").into_owned(),
+        None,
+    );
+
+    b.push(
+        app.main_menu == MainMenuState::Settings,
+        rust_i18n::t!("menu_main_settings").into_owned(),
+        None,
+    );
+
+    b.push(
+        app.main_menu == MainMenuState::ServiceSettings,
+        rust_i18n::t!("menu_main_service").into_owned(),
+        None,
+    );
+
+    b.separator();
+
+    b.push(
+        app.main_menu == MainMenuState::Run,
+        rust_i18n::t!("menu_main_run").into_owned(),
+        None,
+    );
+
+    b.push(
+        app.main_menu == MainMenuState::Quit,
+        rust_i18n::t!("menu_main_quit").into_owned(),
+        None,
+    );
+
+    (
+        b.items,
+        rust_i18n::t!("menu_main_title").into_owned(),
+        b.selected_index,
+    )
 }

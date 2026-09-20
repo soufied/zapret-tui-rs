@@ -5,7 +5,7 @@ mod fakes;
 mod firewalls;
 pub mod inits;
 mod platform;
-// Removed i18n module, using rust_i18n directly
+
 mod ipset;
 mod logger;
 mod runner;
@@ -118,8 +118,10 @@ fn main() {
         std::env::set_var("ZAPRET_CACHE_DIR", d);
     }
 
-    // Make sure the bundled custom strategies are present in the
-    // `custom-strategies` folder so they can be picked from the strategy menu.
+    if let Err(e) = config::ensure_default_config() {
+        println!("{}{}", rust_i18n::t!("msg_err"), e);
+    }
+
     if let Err(e) = strategy::ensure_custom_strategies() {
         println!("{}{}", rust_i18n::t!("err_custom_strategies"), e);
     }
@@ -141,6 +143,8 @@ fn main() {
         println!("{}{}", rust_i18n::t!("msg_load_cfg"), config_file);
         match config::load_config(config_file) {
             Ok(cfg) => {
+                runner::set_engine(cfg.engine.clone());
+                std::env::set_var("REPO_DIR", cfg.engine.workspace_dir());
                 use_interface = cfg.interface;
                 use_strategy = Some(cfg.strategy);
                 use_gamefilter_tcp = cfg.gamefilter_tcp;
@@ -180,10 +184,6 @@ fn main() {
         .unwrap_or_else(|e| eprintln!("{}{}", rust_i18n::t!("err_ctrl_c"), e));
     }
 
-    // Single event reader for the whole process lifetime. Re-entering the TUI
-    // after each "Run" must reuse this reader: spawning a new one per session
-    // leaks threads that stay blocked on the console input handle and starve
-    // the live reader of events.
     let reader = tui::spawn_event_reader();
 
     loop {
@@ -204,6 +204,7 @@ fn main() {
                 .unwrap_or(&"any".to_string())
                 .to_string();
             use_strategy = app.strategies.get(app.selected_strategy).cloned();
+            runner::set_engine(app.engine.clone());
             use_gamefilter_tcp = app.tcp_gamefilter;
             use_gamefilter_udp = app.udp_gamefilter;
             #[cfg(target_os = "linux")]
@@ -245,6 +246,11 @@ fn main() {
             } else {
                 exit(1);
             }
+        }
+
+        if !runner::active_engine().supports_game_filter() {
+            use_gamefilter_tcp = false;
+            use_gamefilter_udp = false;
         }
 
         #[cfg(target_os = "linux")]

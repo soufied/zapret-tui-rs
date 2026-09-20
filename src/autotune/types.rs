@@ -106,7 +106,7 @@ impl BlockCheckType {
 
 #[derive(Debug, Clone)]
 pub struct BlockChecks {
-    pub enabled: Vec<bool>, // same order as BlockCheckType::all()
+    pub enabled: Vec<bool>,
 }
 
 impl BlockChecks {
@@ -218,9 +218,9 @@ pub struct PresetResult {
 
 #[derive(Debug, Clone)]
 pub struct AutotuneResults {
-    pub block_results: Vec<CheckResult>, // DNS, TCP RST, SNI, SIBERIAN, QUIC, CIDR
+    pub block_results: Vec<CheckResult>,
     pub preset_results: Vec<PresetResult>,
-    pub common_strategies: Vec<String>, // strategies that work across ALL selected presets
+    pub common_strategies: Vec<String>,
     pub elapsed_secs: u64,
 }
 

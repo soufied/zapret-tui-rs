@@ -3,9 +3,6 @@ pub struct DomainPreset {
     pub domains: &'static [&'static str],
 }
 
-/// One editable text file per preset (index-aligned with `PRESETS`).
-/// For built-in presets the file holds EXTRA domains added to the defaults;
-/// for the last (Custom) preset the file is the full domain list.
 pub const PRESET_FILES: &[&str] = &[
     "autotune_preset_discord.txt",
     "autotune_preset_youtube.txt",

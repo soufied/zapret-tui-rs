@@ -3,14 +3,22 @@ use std::fs;
 use std::path::Path;
 use std::process::Command;
 
-pub struct InitManager;
+pub struct InitManager {
+    name: &'static str,
+}
 
 impl InitManager {
-    const SCRIPT_PATH: &'static str = "/etc/init.d/zapret-rust";
-    const SERVICE_NAME: &'static str = "zapret-rust";
+    pub fn new(name: &'static str) -> Self {
+        Self { name }
+    }
+
+    fn script_path(&self) -> String {
+        format!("/etc/init.d/{}", self.name)
+    }
 
     fn run_init_script(&self, action: &str) -> Result<(), String> {
-        let output = Command::new(Self::SCRIPT_PATH)
+        let script_path = self.script_path();
+        let output = Command::new(&script_path)
             .arg(action)
             .output()
             .map_err(|e| format!("{}{}", rust_i18n::t!("err_exec_init"), e))?;
@@ -20,7 +28,7 @@ impl InitManager {
             let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
             Err(format!(
                 "{} {} failed: {}",
-                Self::SCRIPT_PATH,
+                script_path,
                 action,
                 if stderr.is_empty() {
                     format!("exit code {:?}", output.status.code())
@@ -32,7 +40,6 @@ impl InitManager {
     }
 
     fn register_service(&self) -> Result<(), String> {
-        // Try update-rc.d first (Debian/Ubuntu/Devuan)
         if Command::new("which")
             .arg("update-rc.d")
             .output()
@@ -40,7 +47,7 @@ impl InitManager {
             .unwrap_or(false)
         {
             let output = Command::new("update-rc.d")
-                .arg(Self::SERVICE_NAME)
+                .arg(self.name)
                 .arg("defaults")
                 .output()
                 .map_err(|e| format!("{}{}", rust_i18n::t!("err_exec_update_rc"), e))?;
@@ -49,7 +56,7 @@ impl InitManager {
                 return Err(format!("update-rc.d failed: {}", stderr));
             }
         }
-        // Fallback to chkconfig (RedHat/CentOS/openSUSE)
+
         else if Command::new("which")
             .arg("chkconfig")
             .output()
@@ -58,7 +65,7 @@ impl InitManager {
         {
             let output = Command::new("chkconfig")
                 .arg("--add")
-                .arg(Self::SERVICE_NAME)
+                .arg(self.name)
                 .output()
                 .map_err(|e| format!("{}{}", rust_i18n::t!("err_exec_chkconfig"), e))?;
             if !output.status.success() {
@@ -77,7 +84,7 @@ impl InitManager {
             .unwrap_or(false)
         {
             let _ = Command::new("update-rc.d")
-                .args(["-f", Self::SERVICE_NAME, "remove"])
+                .args(["-f", self.name, "remove"])
                 .output();
         } else if Command::new("which")
             .arg("chkconfig")
@@ -85,7 +92,7 @@ impl InitManager {
             .map(|o| o.status.success())
             .unwrap_or(false)
         {
-            let _ = Command::new("chkconfig").arg("--del").arg(Self::SERVICE_NAME).output();
+            let _ = Command::new("chkconfig").arg("--del").arg(self.name).output();
         }
         Ok(())
     }
@@ -93,14 +100,14 @@ impl InitManager {
 
 impl ServiceManager for InitManager {
     fn is_installed(&self) -> bool {
-        Path::new(Self::SCRIPT_PATH).exists()
+        Path::new(&self.script_path()).exists()
     }
 
     fn is_active(&self) -> bool {
         if !self.is_installed() {
             return false;
         }
-        let output = Command::new(Self::SCRIPT_PATH).arg("status").output();
+        let output = Command::new(self.script_path()).arg("status").output();
         match output {
             Ok(out) => out.status.success(),
             Err(_) => false,
@@ -119,16 +126,16 @@ impl ServiceManager for InitManager {
         let script_content = format!(
             r#"#!/bin/sh
 ### BEGIN INIT INFO
-# Provides:          zapret-rust
+# Provides:          {name}
 # Required-Start:    $network $local_fs
 # Required-Stop:     $network $local_fs
 # Default-Start:     2 3 4 5
 # Default-Stop:      0 1 6
-# Short-Description: Zapret Discord Youtube Service
+# Short-Description: {desc}
 ### END INIT INFO
 
-DESC="Zapret Discord Youtube Service"
-NAME="zapret-rust"
+DESC="{desc}"
+NAME="{name}"
 DAEMON="{}"
 DAEMON_ARGS="--config {} --cache-dir {}"
 PIDFILE="/var/run/$NAME.pid"
@@ -161,16 +168,21 @@ case "$1" in
         ;;
 esac
 "#,
-            exe_str, config_str, cache_str
+            exe_str,
+            config_str,
+            cache_str,
+            name = self.name,
+            desc = crate::inits::service_description(self.name)
         );
 
-        fs::write(Self::SCRIPT_PATH, script_content)
+        let script_path = self.script_path();
+        fs::write(&script_path, script_content)
             .map_err(|e| format!("{}{}", rust_i18n::t!("err_write_sysv"), e))?;
 
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
-            fs::set_permissions(Self::SCRIPT_PATH, fs::Permissions::from_mode(0o755))
+            fs::set_permissions(&script_path, fs::Permissions::from_mode(0o755))
                 .map_err(|e| format!("{}{}", rust_i18n::t!("err_chmod_sysv"), e))?;
         }
 
@@ -180,12 +192,12 @@ esac
     }
 
     fn uninstall(&self) -> Result<(), String> {
-        // Stop service first (ignore errors)
         let _ = self.run_init_script("stop");
         let _ = self.unregister_service();
 
-        if Path::new(Self::SCRIPT_PATH).exists() {
-            fs::remove_file(Self::SCRIPT_PATH).map_err(|e| format!("{}{}", rust_i18n::t!("err_rm_sysv"), e))?;
+        let script_path = self.script_path();
+        if Path::new(&script_path).exists() {
+            fs::remove_file(&script_path).map_err(|e| format!("{}{}", rust_i18n::t!("err_rm_sysv"), e))?;
         }
 
         Ok(())

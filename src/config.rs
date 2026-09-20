@@ -1,9 +1,106 @@
 use std::env;
+use std::fmt;
 use std::fs;
 
-/// Runtime configuration assembled from CLI flags or a config file.
+#[derive(Debug, Clone, PartialEq)]
+pub enum ZapretEngine {
+    Zapret1,
+    Zapret2,
+}
+
+impl Default for ZapretEngine {
+    fn default() -> Self {
+        Self::Zapret1
+    }
+}
+
+impl fmt::Display for ZapretEngine {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Zapret1 => write!(f, "zapret"),
+            Self::Zapret2 => write!(f, "zapret2"),
+        }
+    }
+}
+
+impl ZapretEngine {
+    pub fn workspace_folder(&self) -> String {
+        match self {
+            Self::Zapret1 => "zapret-discord-youtube-linux".to_string(),
+            Self::Zapret2 => "zapret2-discord-youtube-linux".to_string(),
+        }
+    }
+
+    pub fn from_str(s: &str) -> Self {
+        match s.to_lowercase().as_str() {
+            "zapret2" => Self::Zapret2,
+            _ => Self::Zapret1,
+        }
+    }
+
+    pub fn binary_name(&self) -> &'static str {
+        match self {
+            Self::Zapret1 => {
+                if cfg!(target_os = "windows") {
+                    "winws.exe"
+                } else {
+                    "nfqws"
+                }
+            }
+            Self::Zapret2 => {
+                if cfg!(target_os = "windows") {
+                    "winws2.exe"
+                } else {
+                    "nfqws2"
+                }
+            }
+        }
+    }
+
+    pub fn workspace_dir(&self) -> std::path::PathBuf {
+        get_cache_dir().join(self.workspace_folder())
+    }
+
+    pub fn presets_dir(&self) -> std::path::PathBuf {
+        self.workspace_dir().join("presets")
+    }
+
+    pub fn binary_path(&self) -> std::path::PathBuf {
+        get_cache_dir().join("bin").join(self.binary_name())
+    }
+
+    pub fn uses_presets(&self) -> bool {
+        matches!(self, Self::Zapret2)
+    }
+
+    pub fn supports_game_filter(&self) -> bool {
+        matches!(self, Self::Zapret1)
+    }
+
+    pub fn service_name(&self) -> &'static str {
+        match self {
+            Self::Zapret1 => "zapret-rust",
+            Self::Zapret2 => "zapret2-rust",
+        }
+    }
+}
+
+pub fn load_engine() -> ZapretEngine {
+    load_config(&config_path().to_string_lossy())
+        .map(|cfg| cfg.engine)
+        .unwrap_or_default()
+}
+
+pub fn save_strategy(strategy: &str) -> Result<(), String> {
+    let path = config_path();
+    let mut cfg = load_config(&path.to_string_lossy()).unwrap_or_default();
+    cfg.strategy = strategy.to_string();
+    save_config(&cfg)
+}
+
 #[derive(Debug)]
 pub struct RunConfig {
+    pub engine: ZapretEngine,
     pub interface: String,
     pub strategy: String,
     pub gamefilter_tcp: bool,
@@ -12,11 +109,14 @@ pub struct RunConfig {
     pub active_discord_fake: String,
     pub active_gamefilter_fake: String,
     pub dpi_desync_ttl: Option<u8>,
+    pub editor: String,
+    pub backup_lists: bool,
 }
 
 impl Default for RunConfig {
     fn default() -> Self {
         Self {
+            engine: ZapretEngine::Zapret1,
             interface: "any".to_string(),
             strategy: String::new(),
             gamefilter_tcp: false,
@@ -25,11 +125,12 @@ impl Default for RunConfig {
             active_discord_fake: "quic_initial_steamcommunity_com.bin".to_string(),
             active_gamefilter_fake: "quic_initial_4pda_to.bin".to_string(),
             dpi_desync_ttl: None,
+            editor: String::new(),
+            backup_lists: true,
         }
     }
 }
 
-/// Parse a simple `key=value` env-style config file.
 pub fn load_config(file: &str) -> Result<RunConfig, String> {
     let content = fs::read_to_string(file).map_err(|e| format!("Cannot read config '{}': {}", file, e))?;
 
@@ -37,7 +138,9 @@ pub fn load_config(file: &str) -> Result<RunConfig, String> {
 
     for line in content.lines() {
         let line = line.trim();
-        if let Some(val) = line.strip_prefix("interface=") {
+        if let Some(val) = line.strip_prefix("engine=") {
+            cfg.engine = ZapretEngine::from_str(val.trim());
+        } else if let Some(val) = line.strip_prefix("interface=") {
             cfg.interface = val.trim().to_string();
         } else if let Some(val) = line.strip_prefix("strategy=") {
             cfg.strategy = val.trim().to_string();
@@ -53,14 +156,16 @@ pub fn load_config(file: &str) -> Result<RunConfig, String> {
             cfg.active_gamefilter_fake = val.trim().to_string();
         } else if let Some(val) = line.strip_prefix("dpi_desync_ttl=") {
             cfg.dpi_desync_ttl = val.trim().parse::<u8>().ok();
+        } else if let Some(val) = line.strip_prefix("editor=") {
+            cfg.editor = val.trim().to_string();
+        } else if let Some(val) = line.strip_prefix("backup_lists=") {
+            cfg.backup_lists = !matches!(val.trim().to_lowercase().as_str(), "false" | "0" | "no" | "off");
         }
     }
 
     Ok(cfg)
 }
 
-/// Return available network interfaces.
-/// On Windows and macOS there is no `/sys/class/net`, so only "any" is returned.
 pub fn get_interfaces() -> Vec<String> {
     #[allow(unused_mut)]
     let mut interfaces = vec!["any".to_string()];
@@ -74,7 +179,7 @@ pub fn get_interfaces() -> Vec<String> {
         }
     }
 
-    let _ = env::consts::OS; // keep `env` import used on all platforms
+    let _ = env::consts::OS;
     interfaces
 }
 
@@ -95,6 +200,7 @@ pub fn get_cache_dir() -> std::path::PathBuf {
 const CONFIG_FILENAME: &str = "conf.env";
 
 const DEFAULT_CONFIG_LINES: &[&str] = &[
+    "engine=zapret",
     "interface=any",
     "strategy=",
     "gamefiltertcp=false",
@@ -103,6 +209,8 @@ const DEFAULT_CONFIG_LINES: &[&str] = &[
     "active_discord_fake=quic_initial_steamcommunity_com.bin",
     "active_gamefilter_fake=quic_initial_4pda_to.bin",
     "dpi_desync_ttl=",
+    "editor=",
+    "backup_lists=true",
 ];
 
 pub fn config_path() -> std::path::PathBuf {
@@ -113,22 +221,20 @@ pub fn save_config(cfg: &RunConfig) -> Result<(), String> {
     let path = config_path();
     let ttl = cfg.dpi_desync_ttl.map(|v| v.to_string()).unwrap_or_default();
     let content = format!(
-        "interface={}\nstrategy={}\ngamefiltertcp={}\ngamefilterudp={}\nbackend={}\nactive_discord_fake={}\nactive_gamefilter_fake={}\ndpi_desync_ttl={}\n",
-        cfg.interface, cfg.strategy, cfg.gamefilter_tcp, cfg.gamefilter_udp, cfg.backend,
-        cfg.active_discord_fake, cfg.active_gamefilter_fake, ttl,
+        "engine={}\ninterface={}\nstrategy={}\ngamefiltertcp={}\ngamefilterudp={}\nbackend={}\nactive_discord_fake={}\nactive_gamefilter_fake={}\ndpi_desync_ttl={}\neditor={}\nbackup_lists={}\n",
+        cfg.engine, cfg.interface, cfg.strategy, cfg.gamefilter_tcp, cfg.gamefilter_udp, cfg.backend,
+        cfg.active_discord_fake, cfg.active_gamefilter_fake, ttl, cfg.editor, cfg.backup_lists,
     );
     fs::write(&path, &content).map_err(|e| format!("Cannot write config '{}': {}", path.display(), e))?;
     Ok(())
 }
 
-/// Load the fixed DPI TTL value, if any.
 pub fn load_ttl() -> Option<u8> {
     load_config(&config_path().to_string_lossy())
         .ok()
         .and_then(|cfg| cfg.dpi_desync_ttl)
 }
 
-/// Persist the fixed DPI TTL value (None = off / autottl).
 pub fn save_ttl(ttl: Option<u8>) -> Result<(), String> {
     let path = config_path();
     let mut cfg = load_config(&path.to_string_lossy()).unwrap_or_default();
@@ -136,9 +242,17 @@ pub fn save_ttl(ttl: Option<u8>) -> Result<(), String> {
     save_config(&cfg)
 }
 
-pub fn save_tui_state(interface: &str, strategy: &str, tcp: bool, udp: bool, backend: &str) -> Result<(), String> {
+pub fn save_tui_state(
+    engine: &ZapretEngine,
+    interface: &str,
+    strategy: &str,
+    tcp: bool,
+    udp: bool,
+    backend: &str,
+) -> Result<(), String> {
     let path = config_path();
     let mut cfg = load_config(&path.to_string_lossy()).unwrap_or_default();
+    cfg.engine = engine.clone();
     cfg.interface = interface.to_string();
     cfg.strategy = strategy.to_string();
     cfg.gamefilter_tcp = tcp;
@@ -205,8 +319,6 @@ fn validate_config() -> Result<(), String> {
         }
     }
 
-    // Migrate configs written before the GameFilter default fake filename was
-    // corrected (dot in "quic_initial_4pda.to.bin" -> underscore on disk).
     let legacy_gamefilter_fake = "active_gamefilter_fake=quic_initial_4pda.to.bin";
     if content.contains(legacy_gamefilter_fake) {
         content = content.replace(
@@ -233,5 +345,30 @@ pub fn save_active_fakes(discord: &str, game: &str) -> Result<(), String> {
     let mut cfg = load_config(&path.to_string_lossy()).unwrap_or_default();
     cfg.active_discord_fake = discord.to_string();
     cfg.active_gamefilter_fake = game.to_string();
+    save_config(&cfg)
+}
+pub fn load_editor() -> String {
+    load_config(&config_path().to_string_lossy())
+        .map(|cfg| cfg.editor)
+        .unwrap_or_default()
+}
+
+pub fn save_editor(editor: &str) -> Result<(), String> {
+    let path = config_path();
+    let mut cfg = load_config(&path.to_string_lossy()).unwrap_or_default();
+    cfg.editor = editor.trim().to_string();
+    save_config(&cfg)
+}
+
+pub fn load_backup_lists() -> bool {
+    load_config(&config_path().to_string_lossy())
+        .map(|cfg| cfg.backup_lists)
+        .unwrap_or(true)
+}
+
+pub fn save_backup_lists(enabled: bool) -> Result<(), String> {
+    let path = config_path();
+    let mut cfg = load_config(&path.to_string_lossy()).unwrap_or_default();
+    cfg.backup_lists = enabled;
     save_config(&cfg)
 }

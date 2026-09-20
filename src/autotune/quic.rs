@@ -1,11 +1,3 @@
-//! Real QUIC v1 Initial packet construction (RFC 9000) with proper
-//! TLS 1.3 ClientHello (RFC 9001) protection.
-//!
-//! Network filters that only drop "fake" QUIC probes (arbitrary long-header
-//! datagrams) but pass real browser HTTP/3 traffic can only be detected by
-//! sending a genuine Initial packet. This module builds one, verifies it
-//! against the RFC 9001 Appendix A.2 test vector, and exposes a UDP probe.
-
 use std::io;
 use std::net::SocketAddr;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -21,7 +13,6 @@ type HmacSha256 = Hmac<Sha256>;
 type Aes128 = aes::Aes128;
 type Aes128Gcm = aes_gcm::Aes128Gcm;
 
-/// RFC 9001 section 5.2 initial_salt.
 const INITIAL_SALT: [u8; 20] = [
     0x38, 0x76, 0x2c, 0xf7, 0xf5, 0x59, 0x34, 0xb3, 0x4d, 0x17, 0x9a, 0xe6, 0xa4, 0xc8, 0x0c, 0xad, 0xcc, 0xbb, 0x7f,
     0x0a,
@@ -33,12 +24,8 @@ const QUIC_IV_LABEL: &str = "quic iv";
 const QUIC_HP_LABEL: &str = "quic hp";
 const TLS13_PREFIX: &[u8] = b"tls13 ";
 
-/// Servers MUST discard Initial datagrams smaller than 1200 bytes (RFC 9000
-/// section 14.1). Datagrams larger than that are also dropped (or ICMP
-/// reduced), so the probe is padded to exactly 1200 bytes.
 const TARGET_DATAGRAM: usize = 1200;
 
-/// Public key of X25519 base point (u=9), little-endian.
 const X25519_BASE_PUBLIC: [u8; 32] = {
     let mut k = [0u8; 32];
     k[0] = 9;
@@ -75,7 +62,6 @@ fn hkdf_expand(prk: &[u8], info: &[u8], out_len: usize) -> Vec<u8> {
     out
 }
 
-/// TLS 1.3 HKDF-Expand-Label (RFC 8446 section 7.1).
 fn hkdf_expand_label(secret: &[u8], label: &str, context: &[u8], out_len: usize) -> Vec<u8> {
     let mut full_label = Vec::with_capacity(TLS13_PREFIX.len() + label.len());
     full_label.extend_from_slice(TLS13_PREFIX);
@@ -90,8 +76,6 @@ fn hkdf_expand_label(secret: &[u8], label: &str, context: &[u8], out_len: usize)
     hkdf_expand(secret, &info, out_len)
 }
 
-/// Derives the client Initial packet protection keys from the Destination
-/// Connection ID (RFC 9001 sections 5.1 and 5.2).
 pub fn derive_initial_keys(dcid: &[u8]) -> InitialKeys {
     let initial_secret = hkdf_extract(&INITIAL_SALT, dcid);
     let client_secret = hkdf_expand_label(&initial_secret, CLIENT_IN_LABEL, b"", 32);
@@ -112,7 +96,6 @@ fn aes_ecb(key: &[u8; 16], block: &[u8]) -> [u8; 16] {
     out.into()
 }
 
-/// RFC 9001 section 5.4.2 header protection for short packet numbers.
 fn apply_header_protection(pkt: &mut [u8], pn_offset: usize, pn_len: usize, hp: &[u8; 16]) {
     let sample_offset = pn_offset + 4;
     let sample = &pkt[sample_offset..sample_offset + 16];
@@ -123,7 +106,6 @@ fn apply_header_protection(pkt: &mut [u8], pn_offset: usize, pn_len: usize, hp: 
     }
 }
 
-/// QUIC variable-length integer (RFC 9000 section 16).
 fn varint(mut value: u64) -> Vec<u8> {
     let mut prefix = 0u8;
     let mut len = 1;
@@ -145,8 +127,6 @@ fn encode_pn(pn: u64, len: usize) -> Vec<u8> {
     be[be.len() - len..].to_vec()
 }
 
-/// XORs the 12-byte IV with the packet number right-aligned to 12 bytes
-/// (RFC 9001 section 5.3).
 fn build_nonce(iv: &[u8; 12], pn: u64) -> [u8; 12] {
     let mut nonce = *iv;
     let pnb = pn.to_be_bytes();
@@ -164,23 +144,20 @@ fn aes128gcm_encrypt(key: &[u8; 16], nonce: &[u8; 12], aad: &[u8], plaintext: &[
         .expect("AES-128-GCM encryption failed")
 }
 
-/// Builds a protected QUIC v1 Initial packet (RFC 9000 section 17.2.1).
-/// `frames` are the unprotected payload frames; the AEAD tag is appended by
-/// the cipher. `pn_len` selects the packet number field size (1, 2, 3 or 4).
 pub fn build_initial_packet(dcid: &[u8], scid: &[u8], pn: u64, pn_len: usize, frames: &[u8]) -> Vec<u8> {
     debug_assert!((1..=4).contains(&pn_len));
     let keys = derive_initial_keys(dcid);
 
     let mut header = Vec::new();
     header.push(0xc0 | ((pn_len - 1) as u8));
-    header.extend_from_slice(&1u32.to_be_bytes()); // QUIC version 1
+    header.extend_from_slice(&1u32.to_be_bytes());
     header.push(dcid.len() as u8);
     header.extend_from_slice(dcid);
     header.push(scid.len() as u8);
     header.extend_from_slice(scid);
-    header.extend_from_slice(&varint(0)); // token length (no token)
+    header.extend_from_slice(&varint(0));
 
-    let length = (pn_len + frames.len() + 16) as u64; // PN + payload + tag
+    let length = (pn_len + frames.len() + 16) as u64;
     header.extend_from_slice(&varint(length));
 
     let pn_offset = header.len();
@@ -195,10 +172,6 @@ pub fn build_initial_packet(dcid: &[u8], scid: &[u8], pn: u64, pn_len: usize, fr
     header
 }
 
-// ---------------------------------------------------------------------------
-// TLS 1.3 ClientHello construction
-// ---------------------------------------------------------------------------
-
 fn push_ext(out: &mut Vec<u8>, ext_type: u16, data: &[u8]) {
     out.extend_from_slice(&ext_type.to_be_bytes());
     out.extend_from_slice(&(data.len() as u16).to_be_bytes());
@@ -208,14 +181,14 @@ fn push_ext(out: &mut Vec<u8>, ext_type: u16, data: &[u8]) {
 fn ext_server_name(out: &mut Vec<u8>, name: &[u8]) {
     let mut data = Vec::new();
     data.extend_from_slice(&(1 + 2 + name.len() as u16).to_be_bytes());
-    data.push(0); // host_name
+    data.push(0);
     data.extend_from_slice(&(name.len() as u16).to_be_bytes());
     data.extend_from_slice(name);
     push_ext(out, 0x0000, &data);
 }
 
 fn ext_supported_groups(out: &mut Vec<u8>) {
-    let groups = [0x00, 0x1d, 0x00, 0x17]; // x25519, secp256r1
+    let groups = [0x00, 0x1d, 0x00, 0x17];
     let mut data = Vec::new();
     data.extend_from_slice(&(groups.len() as u16).to_be_bytes());
     data.extend_from_slice(&groups);
@@ -244,8 +217,8 @@ fn ext_alpn(out: &mut Vec<u8>, protocols: &[&[u8]]) {
 
 fn ext_key_share(out: &mut Vec<u8>) {
     let mut data = Vec::new();
-    data.extend_from_slice(&36u16.to_be_bytes()); // 2 + 2 + 32
-    data.extend_from_slice(&[0x00, 0x1d]); // x25519
+    data.extend_from_slice(&36u16.to_be_bytes());
+    data.extend_from_slice(&[0x00, 0x1d]);
     data.extend_from_slice(&32u16.to_be_bytes());
     data.extend_from_slice(&X25519_BASE_PUBLIC);
     push_ext(out, 0x0033, &data);
@@ -254,20 +227,18 @@ fn ext_key_share(out: &mut Vec<u8>) {
 fn ext_supported_versions(out: &mut Vec<u8>) {
     let mut data = Vec::new();
     data.push(2);
-    data.extend_from_slice(&[0x03, 0x04]); // TLS 1.3
+    data.extend_from_slice(&[0x03, 0x04]);
     push_ext(out, 0x002b, &data);
 }
 
 fn ext_quic_transport_parameters(out: &mut Vec<u8>, scid: &[u8]) {
     let mut data = Vec::new();
-    data.push(0x0f); // initial_source_connection_id (0x0f)
+    data.push(0x0f);
     data.extend_from_slice(&varint(scid.len() as u64));
     data.extend_from_slice(scid);
     push_ext(out, 0x0039, &data);
 }
 
-/// Builds a TLS 1.3 ClientHello handshake message (RFC 8446) with the
-/// extensions required by a QUIC client (RFC 9001 section 8.1).
 pub fn build_client_hello(server_name: &str, scid: &[u8]) -> Vec<u8> {
     let mut extensions = Vec::new();
     ext_server_name(&mut extensions, server_name.as_bytes());
@@ -281,38 +252,32 @@ pub fn build_client_hello(server_name: &str, scid: &[u8]) -> Vec<u8> {
     let random = random_bytes(32);
 
     let mut body = Vec::new();
-    body.extend_from_slice(&[0x03, 0x03]); // legacy_version TLS 1.2
+    body.extend_from_slice(&[0x03, 0x03]);
     body.extend_from_slice(&random);
     body.push(32);
-    body.extend_from_slice(&[0u8; 32]); // legacy_session_id
+    body.extend_from_slice(&[0u8; 32]);
     body.extend_from_slice(&6u16.to_be_bytes());
     body.extend_from_slice(&[0x13, 0x01, 0x13, 0x02, 0x13, 0x03]);
     body.push(1);
-    body.push(0); // compression_methods: null
+    body.push(0);
     body.extend_from_slice(&(extensions.len() as u16).to_be_bytes());
     body.extend_from_slice(&extensions);
 
     let mut msg = Vec::new();
-    msg.push(0x01); // ClientHello
+    msg.push(0x01);
     msg.extend_from_slice(&[(body.len() >> 16) as u8, (body.len() >> 8) as u8, body.len() as u8]);
     msg.extend_from_slice(&body);
     msg
 }
 
-/// Builds the CRYPTO frame carrying the ClientHello, followed by PADDING
-/// frames to reach the required Initial datagram size.
 fn build_initial_frames(ch: &[u8]) -> Vec<u8> {
     let mut frames = Vec::new();
-    frames.push(0x06); // CRYPTO
-    frames.extend_from_slice(&varint(0)); // offset
+    frames.push(0x06);
+    frames.extend_from_slice(&varint(0));
     frames.extend_from_slice(&varint(ch.len() as u64));
     frames.extend_from_slice(ch);
     frames
 }
-
-// ---------------------------------------------------------------------------
-// Probe
-// ---------------------------------------------------------------------------
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum ProbeOutcome {
@@ -327,16 +292,13 @@ fn send_one_probe(sock: &std::net::UdpSocket, server_name: &str) -> ProbeOutcome
     let ch = build_client_hello(server_name, &scid);
     let mut frames = build_initial_frames(&ch);
 
-    // Header size without the PN field, length field and AEAD tag: first byte,
-    // version, DCID len+id, SCID len+id, token len. With an 8-byte DCID and
-    // SCID and a 2-byte length varint this is 26 bytes.
     let fixed_header = 1 + 4 + 1 + dcid.len() + 1 + scid.len() + 1;
     let pn_len = 1;
     let length_varint_len = 2;
     let tag_len = 16;
     let max_frames = TARGET_DATAGRAM.saturating_sub(fixed_header + length_varint_len + pn_len + tag_len);
     if frames.len() < max_frames {
-        frames.resize(max_frames, 0x00); // PADDING frames
+        frames.resize(max_frames, 0x00);
     }
 
     let pkt = build_initial_packet(&dcid, &scid, 0, pn_len, &frames);
@@ -355,15 +317,10 @@ fn send_one_probe(sock: &std::net::UdpSocket, server_name: &str) -> ProbeOutcome
     }
 }
 
-/// Sends one genuine QUIC v1 Initial packet on an already connected socket and
-/// reports whether a reply arrived (using the socket's read timeout).
 pub fn send_probe(sock: &std::net::UdpSocket, server_name: &str) -> ProbeOutcome {
     send_one_probe(sock, server_name)
 }
 
-/// Sends genuine QUIC v1 Initial packets to `addr` and reports whether any
-/// reply arrives. Returns true on the first response; false if all attempts
-/// time out; also false on socket errors.
 pub fn probe_quic(addr: SocketAddr, server_name: &str, attempts: usize, timeout: Duration) -> bool {
     let sock = match std::net::UdpSocket::bind("0.0.0.0:0") {
         Ok(s) => s,

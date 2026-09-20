@@ -13,7 +13,6 @@ pub fn render(app: &AppState) -> (Vec<ListItem<'static>>, String, usize) {
 
     let none_label = rust_i18n::t!("menu_fakes_none").into_owned();
 
-    // Discord UDP
     {
         let is_sel = app.fakes_menu == FakesMenuState::DiscordUdp;
         if is_sel {
@@ -39,7 +38,6 @@ pub fn render(app: &AppState) -> (Vec<ListItem<'static>>, String, usize) {
         index += 1;
     }
 
-    // GameFilter UDP
     {
         let is_sel = app.fakes_menu == FakesMenuState::GameUdp;
         if is_sel {
@@ -65,7 +63,6 @@ pub fn render(app: &AppState) -> (Vec<ListItem<'static>>, String, usize) {
         index += 1;
     }
 
-    // Back
     {
         let is_sel = app.fakes_menu == FakesMenuState::Back;
         if is_sel {
@@ -96,7 +93,6 @@ pub fn render_select(
         FakesSelectTarget::GameUdp => state.game_active.as_deref().unwrap_or(&none_label),
     };
 
-    // Header: Current value (index 0, not selectable as a file)
     {
         let is_sel = index == selected_index;
         let current_spans = vec![
@@ -121,7 +117,6 @@ pub fn render_select(
         index += 1;
     }
 
-    // Available .bin files
     for fake in &state.available {
         let is_sel = index == selected_index;
         items.push(ListItem::new(format!("   {}", fake.filename)).style(if is_sel {
@@ -132,7 +127,6 @@ pub fn render_select(
         index += 1;
     }
 
-    // Back
     {
         let is_sel = index == selected_index;
         items.push(
