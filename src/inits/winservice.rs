@@ -207,16 +207,24 @@ fn my_service_main(_arguments: Vec<std::ffi::OsString>) {
 
     let backend = crate::firewalls::windivert::WinDivertBackend;
 
-    crate::runner::run_zapret(
+    if let Err(e) = crate::runner::run_zapret(
         &cfg.strategy,
         &cfg.interface,
         cfg.gamefilter_tcp,
         cfg.gamefilter_udp,
         &backend,
-    );
+    ) {
+        eprintln!("{}", e);
+        crate::runner::stop_zapret_quiet(&backend);
+        report_stopped(&status_handle, 1);
+        return;
+    }
 
     while RUNNING.load(Ordering::SeqCst) {
         thread::sleep(Duration::from_millis(100));
+        if !crate::runner::nfqws_process_running() {
+            break;
+        }
     }
 
     let _ = status_handle.set_service_status(ServiceStatus {

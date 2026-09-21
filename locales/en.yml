@@ -184,6 +184,8 @@ err_setcap: " (failed to setcap cap_net_admin+ep, root may be required)"
 msg_cmd: " Command: "
 msg_nfqws_run: " nfqws started"
 err_start_nfqws: " Error starting nfqws: "
+err_nfqws_vanished: "the daemon exited while running, firewall rules were rolled back"
+msg_staging_ready: " Runtime directory prepared: "
 
 root_req: "Root privileges required. Restarting with elevated privileges..."
 root_err_sudo: "Privilege escalation error: sudo failed to launch"
