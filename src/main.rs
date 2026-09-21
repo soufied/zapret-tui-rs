@@ -9,6 +9,7 @@ mod platform;
 mod ipset;
 mod logger;
 mod runner;
+mod staging;
 mod strategy;
 mod ttl;
 mod tui;
@@ -274,24 +275,45 @@ fn main() {
             backend_info
         );
 
-        runner::run_zapret(
+        if let Err(e) = runner::run_zapret(
             &strategy_file,
             &use_interface,
             use_gamefilter_tcp,
             use_gamefilter_udp,
             &backend,
-        );
+        ) {
+            eprintln!("{}", e);
+            runner::stop_zapret_quiet(&backend);
+            if is_interactive {
+                thread::sleep(Duration::from_secs(2));
+                continue;
+            }
+            exit(1);
+        }
 
-        thread::sleep(Duration::from_millis(100));
         println!("{}", rust_i18n::t!("msg_zapret_started"));
 
         RUNNING.store(true, Ordering::SeqCst);
 
+        let mut daemon_lost = false;
         while RUNNING.load(Ordering::SeqCst) {
             thread::sleep(Duration::from_millis(100));
+            if !runner::nfqws_process_running() {
+                daemon_lost = true;
+                break;
+            }
         }
 
         runner::stop_zapret(&backend);
+
+        if daemon_lost {
+            eprintln!("{}{}", rust_i18n::t!("err_start_nfqws"), rust_i18n::t!("err_nfqws_vanished"));
+            if is_interactive {
+                thread::sleep(Duration::from_secs(2));
+                continue;
+            }
+            exit(1);
+        }
 
         if !is_interactive {
             break;

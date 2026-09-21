@@ -184,6 +184,8 @@ err_setcap: " (не удалось setcap cap_net_admin+ep, может потр�
 msg_cmd: " Команда: "
 msg_nfqws_run: " nfqws запущен"
 err_start_nfqws: " Ошибка запуска nfqws: "
+err_nfqws_vanished: "процесс завершился во время работы, правила фаервола отменены"
+msg_staging_ready: " Рабочий каталог подготовлен: "
 
 root_req: "Для работы требуются права root. Перезапуск с повышенными привилегиями..."
 root_err_sudo: "Повышения привилегий: sudo не удалось запустить"

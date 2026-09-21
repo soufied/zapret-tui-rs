@@ -1,5 +1,6 @@
 use crate::config::ZapretEngine;
 use crate::firewalls::FirewallBackend;
+use crate::staging::{sanitize_all, Staging};
 use crate::strategy::{self, GameFilterPorts};
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -10,8 +11,11 @@ use std::time::Duration;
 
 static NFQWS_PROCESSES: Mutex<Vec<Child>> = Mutex::new(Vec::new());
 static ENGINE_OVERRIDE: Mutex<Option<ZapretEngine>> = Mutex::new(None);
+static ACTIVE_STAGING: Mutex<Option<Staging>> = Mutex::new(None);
 
 const BIND_SETTLE_MS: u64 = 700;
+const EARLY_EXIT_CHECK_MS: u64 = 150;
+const POLL_STEP_MS: u64 = 50;
 
 pub struct FirewallGuard<'a> {
     backend: &'a dyn FirewallBackend,
@@ -49,6 +53,31 @@ pub fn active_engine() -> ZapretEngine {
         }
     }
     crate::config::load_engine()
+}
+
+fn clear_staging() {
+    if let Ok(mut guard) = ACTIVE_STAGING.lock() {
+        if let Some(mut staging) = guard.take() {
+            staging.dispose();
+        }
+    }
+}
+
+fn store_staging(staging: Staging) {
+    if let Ok(mut guard) = ACTIVE_STAGING.lock() {
+        *guard = Some(staging);
+    }
+}
+
+fn stage_launch(launch: &mut Launch) -> Result<Staging, String> {
+    clear_staging();
+
+    let mut staging = Staging::create(&launch.workspace)?;
+    launch.args = staging.stage_args(&launch.args);
+    launch.log_params = sanitize_all(&launch.log_params);
+    launch.run_dir = staging.root().to_path_buf();
+
+    Ok(staging)
 }
 
 pub fn nfqws_process_running() -> bool {
@@ -235,7 +264,7 @@ fn validate_launch(launch: &Launch) -> Result<(), String> {
     let output = Command::new(&launch.bin)
         .arg("--dry-run")
         .args(&launch.args)
-        .current_dir(&launch.workspace)
+        .current_dir(&launch.run_dir)
         .stdin(Stdio::null())
         .output()
         .map_err(|e| format!("cannot run {} --dry-run: {}", launch.engine.binary_name(), e))?;
@@ -257,21 +286,50 @@ fn validate_launch(launch: &Launch) -> Result<(), String> {
 }
 
 fn confirm_bound(child: &mut Child, engine: &ZapretEngine) -> Result<(), String> {
-    thread::sleep(Duration::from_millis(BIND_SETTLE_MS));
+    let deadline = BIND_SETTLE_MS.max(EARLY_EXIT_CHECK_MS);
+    let mut waited: u64 = 0;
 
-    match child.try_wait() {
-        Ok(Some(status)) => Err(format!(
-            "{} exited before binding NFQUEUE {} ({})",
-            engine.binary_name(),
-            crate::firewalls::NFQUEUE_NUM,
-            status
-        )),
-        Ok(None) => Ok(()),
-        Err(e) => {
-            let _ = child.kill();
-            let _ = child.wait();
-            Err(format!("cannot determine {} state: {}", engine.binary_name(), e))
+    while waited < deadline {
+        let step = POLL_STEP_MS.min(deadline - waited);
+        thread::sleep(Duration::from_millis(step));
+        waited += step;
+
+        match child.try_wait() {
+            Ok(None) => {}
+            Ok(Some(status)) => {
+                return Err(format!(
+                    "{} exited after {} ms before binding NFQUEUE {} ({})",
+                    engine.binary_name(),
+                    waited,
+                    crate::firewalls::NFQUEUE_NUM,
+                    status
+                ))
+            }
+            Err(e) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err(format!("cannot determine {} state: {}", engine.binary_name(), e));
+            }
         }
+    }
+
+    Ok(())
+}
+
+fn abort_child(child: &mut Child) {
+    let _ = child.kill();
+    let _ = child.wait();
+}
+
+fn log_tail(log_path: &Path, offset: u64) -> String {
+    let content = fs::read_to_string(log_path).unwrap_or_default();
+    content.get(offset as usize..).unwrap_or("").to_string()
+}
+
+fn print_log_tail(log_path: &Path, offset: u64) {
+    let tail = log_tail(log_path, offset);
+    if !tail.trim().is_empty() {
+        print!("{}", tail);
     }
 }
 
@@ -295,6 +353,7 @@ pub struct Launch {
     pub engine: ZapretEngine,
     pub bin: PathBuf,
     pub workspace: PathBuf,
+    pub run_dir: PathBuf,
     pub tcp_ports: String,
     pub udp_ports: String,
     pub args: Vec<String>,
@@ -339,11 +398,12 @@ pub fn prepare(
     Ok(Launch {
         engine: engine.clone(),
         bin: bin_path(engine),
+        run_dir: workspace.clone(),
         workspace,
         tcp_ports,
         udp_ports,
-        args,
-        log_params,
+        args: sanitize_all(&args),
+        log_params: sanitize_all(&log_params),
     })
 }
 
@@ -351,23 +411,22 @@ fn log_file_path() -> PathBuf {
     crate::config::get_cache_dir().join("logs").join("zapret.log")
 }
 
-pub fn run_zapret(strategy_file: &str, interface: &str, use_tcp: bool, use_udp: bool, backend: &dyn FirewallBackend) {
+pub fn run_zapret(
+    strategy_file: &str,
+    interface: &str,
+    use_tcp: bool,
+    use_udp: bool,
+    backend: &dyn FirewallBackend,
+) -> Result<(), String> {
     let engine = active_engine();
     let mut term: Vec<String> = Vec::new();
     let ttl = crate::config::load_ttl();
 
-    let launch = match prepare(&engine, strategy_file, use_tcp, use_udp, ttl) {
-        Ok(l) => l,
-        Err(e) => {
-            println!("{}{}", rust_i18n::t!("err_parse_strat"), e);
-            return;
-        }
-    };
+    let mut launch = prepare(&engine, strategy_file, use_tcp, use_udp, ttl)
+        .map_err(|e| format!("{}{}", rust_i18n::t!("err_parse_strat"), e))?;
 
     if !launch.bin.exists() {
-        let msg = rust_i18n::t!("err_bin_miss").replace("{:?}", &format!("{:?}", launch.bin));
-        println!("{}", msg);
-        return;
+        return Err(rust_i18n::t!("err_bin_miss").replace("{:?}", &format!("{:?}", launch.bin)));
     }
 
     if !set_cap(&launch.bin) {
@@ -384,15 +443,24 @@ pub fn run_zapret(strategy_file: &str, interface: &str, use_tcp: bool, use_udp: 
         println!("{}", msg);
     }
 
+    let mut staging = stage_launch(&mut launch)
+        .map_err(|e| format!("{}cannot prepare the runtime directory: {}", rust_i18n::t!("err_start_nfqws"), e))?;
+
+    if staging.is_active() {
+        let msg = format!("{}{}", rust_i18n::t!("msg_staging_ready"), launch.run_dir.display());
+        term.push(msg.clone());
+        println!("{}", msg);
+    }
+
     if let Err(e) = validate_launch(&launch) {
-        println!("{}{}", rust_i18n::t!("err_start_nfqws"), e);
-        return;
+        staging.dispose();
+        return Err(format!("{}{}", rust_i18n::t!("err_start_nfqws"), e));
     }
 
     if let Err(e) = backend.setup(&launch.tcp_ports, &launch.udp_ports, interface) {
-        println!("{}{}", rust_i18n::t!("msg_err_firewall"), e);
         let _ = backend.clear();
-        return;
+        staging.dispose();
+        return Err(format!("{}{}", rust_i18n::t!("msg_err_firewall"), e));
     }
 
     let mut guard = FirewallGuard::new(backend);
@@ -410,27 +478,29 @@ pub fn run_zapret(strategy_file: &str, interface: &str, use_tcp: bool, use_udp: 
     crate::logger::log_nfqws_launch(&launch.bin.to_string_lossy(), &launch.log_params, &term);
 
     let log_path = log_file_path();
-    let _ = fs::create_dir_all(log_path.parent().unwrap());
+    if let Some(parent) = log_path.parent() {
+        let _ = fs::create_dir_all(parent);
+    }
     let offset = fs::metadata(&log_path).map(|m| m.len()).unwrap_or(0);
 
     let output_file = match fs::OpenOptions::new().create(true).append(true).open(&log_path) {
         Ok(f) => f,
         Err(e) => {
-            println!("failed to open log file: {}", e);
-            return;
+            staging.dispose();
+            return Err(format!("failed to open log file: {}", e));
         }
     };
     let out_dup = match output_file.try_clone() {
         Ok(f) => f,
         Err(e) => {
-            println!("failed to clone log file handle: {}", e);
-            return;
+            staging.dispose();
+            return Err(format!("failed to clone log file handle: {}", e));
         }
     };
 
     let mut child = match Command::new(&launch.bin)
         .args(&launch.args)
-        .current_dir(&launch.workspace)
+        .current_dir(&launch.run_dir)
         .stdin(Stdio::null())
         .stdout(output_file)
         .stderr(out_dup)
@@ -438,34 +508,29 @@ pub fn run_zapret(strategy_file: &str, interface: &str, use_tcp: bool, use_udp: 
     {
         Ok(child) => child,
         Err(e) => {
-            println!("{}{}", rust_i18n::t!("err_start_nfqws"), e);
-            return;
+            staging.dispose();
+            return Err(format!("{}{}", rust_i18n::t!("err_start_nfqws"), e));
         }
     };
 
     if let Err(e) = confirm_bound(&mut child, &launch.engine) {
-        println!("{}{}", rust_i18n::t!("err_start_nfqws"), e);
-        let content = fs::read_to_string(&log_path).unwrap_or_default();
-        let tail = content.get(offset as usize..).unwrap_or("").to_string();
-        if !tail.trim().is_empty() {
-            print!("{}", tail);
-        }
-        return;
+        abort_child(&mut child);
+        print_log_tail(&log_path, offset);
+        staging.dispose();
+        return Err(format!("{}{}", rust_i18n::t!("err_start_nfqws"), e));
     }
 
     if let Ok(mut procs) = NFQWS_PROCESSES.lock() {
         procs.push(child);
     }
 
+    store_staging(staging);
     guard.disarm();
 
     println!("{}", rust_i18n::t!("msg_nfqws_run"));
+    print_log_tail(&log_path, offset);
 
-    let content = fs::read_to_string(&log_path).unwrap_or_default();
-    let tail = content.get(offset as usize..).unwrap_or("").to_string();
-    if !tail.trim().is_empty() {
-        print!("{}", tail);
-    }
+    Ok(())
 }
 
 pub fn run_zapret_silent(
@@ -499,7 +564,7 @@ fn run_zapret_silent_impl(
     ttl: Option<u8>,
 ) -> Result<(), String> {
     let engine = active_engine();
-    let launch = prepare(&engine, strategy_file, use_tcp, use_udp, ttl)?;
+    let mut launch = prepare(&engine, strategy_file, use_tcp, use_udp, ttl)?;
 
     if !launch.bin.exists() {
         return Err(format!("binary not found: {:?}", launch.bin));
@@ -508,33 +573,52 @@ fn run_zapret_silent_impl(
     let _ = set_cap(&launch.bin);
     ensure_user_lists(&launch.workspace);
     let _ = ensure_referenced_lists(&launch);
-    validate_launch(&launch)?;
+
+    let mut staging = stage_launch(&mut launch).map_err(|e| format!("staging error: {}", e))?;
+
+    if let Err(e) = validate_launch(&launch) {
+        staging.dispose();
+        return Err(e);
+    }
 
     kill_stale_zapret();
 
-    backend
-        .setup(&launch.tcp_ports, &launch.udp_ports, interface)
-        .map_err(|e| format!("firewall setup error: {}", e))?;
+    if let Err(e) = backend.setup(&launch.tcp_ports, &launch.udp_ports, interface) {
+        let _ = backend.clear();
+        staging.dispose();
+        return Err(format!("firewall setup error: {}", e));
+    }
 
     let mut guard = FirewallGuard::new(backend);
 
     crate::logger::log_nfqws_launch(&launch.bin.to_string_lossy(), &launch.log_params, &[]);
 
-    let mut child = Command::new(&launch.bin)
+    let mut child = match Command::new(&launch.bin)
         .args(&launch.args)
-        .current_dir(&launch.workspace)
+        .current_dir(&launch.run_dir)
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .spawn()
-        .map_err(|e| format!("failed to start {}: {}", launch.engine.binary_name(), e))?;
+    {
+        Ok(child) => child,
+        Err(e) => {
+            staging.dispose();
+            return Err(format!("failed to start {}: {}", launch.engine.binary_name(), e));
+        }
+    };
 
-    confirm_bound(&mut child, &launch.engine)?;
+    if let Err(e) = confirm_bound(&mut child, &launch.engine) {
+        abort_child(&mut child);
+        staging.dispose();
+        return Err(e);
+    }
 
     if let Ok(mut procs) = NFQWS_PROCESSES.lock() {
         procs.push(child);
     }
 
+    store_staging(staging);
     guard.disarm();
     Ok(())
 }
@@ -554,6 +638,8 @@ pub fn stop_zapret(backend: &dyn FirewallBackend) {
         procs.clear();
     }
 
+    clear_staging();
+
     let _ = backend.clear();
 
     let msg = rust_i18n::t!("msg_zapret_clear").to_string();
@@ -572,6 +658,7 @@ pub fn stop_zapret_quiet(backend: &dyn FirewallBackend) {
         procs.clear();
     }
     kill_stale_zapret();
+    clear_staging();
     let _ = backend.clear();
 }
 
@@ -583,6 +670,7 @@ mod tests {
         Launch {
             engine,
             bin: PathBuf::from("nfqws2"),
+            run_dir: workspace.clone(),
             workspace,
             tcp_ports: String::new(),
             udp_ports: String::new(),
