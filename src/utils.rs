@@ -351,9 +351,7 @@ pub fn backup_file(file_path: &str) -> Option<PathBuf> {
 pub fn get_lists_files() -> Vec<String> {
     let mut files = Vec::new();
 
-    let exe_dir = std::env::current_exe()
-        .map(|p| p.parent().unwrap().to_path_buf())
-        .unwrap_or_else(|_| std::env::current_dir().unwrap_or_default());
+    let exe_dir = crate::config::get_app_dir();
 
     let engine = crate::runner::active_engine();
     let base_dir = {

@@ -187,17 +187,18 @@ pub fn get_interfaces() -> Vec<String> {
     interfaces
 }
 
+pub fn get_app_dir() -> std::path::PathBuf {
+    env::current_exe()
+        .ok()
+        .and_then(|p| p.parent().map(|p| p.to_path_buf()))
+        .unwrap_or_else(|| env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from(".")))
+}
+
 pub fn get_cache_dir() -> std::path::PathBuf {
     if let Ok(val) = env::var("ZAPRET_CACHE_DIR") {
         std::path::PathBuf::from(val)
-    } else if let Ok(exe_path) = env::current_exe() {
-        if let Some(parent) = exe_path.parent() {
-            parent.to_path_buf()
-        } else {
-            std::path::PathBuf::from(".")
-        }
     } else {
-        std::path::PathBuf::from(".")
+        get_app_dir()
     }
 }
 

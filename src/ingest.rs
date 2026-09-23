@@ -6,7 +6,6 @@ pub const COMMUNITY_ARCHIVE_URL: &str =
 
 pub const INGESTED_SUBDIRECTORIES: &[&str] = &["bin", "lists", "lua", "profiles"];
 
-const PREFERRED_TARGET: &str = "/home/soufi/zapret2-rust/zapret2-discord-youtube-linux";
 const DOWNLOAD_TIMEOUT_SECS: u64 = 120;
 const MAX_ARCHIVE_BYTES: u64 = 256 * 1024 * 1024;
 
@@ -53,9 +52,9 @@ impl IngestSummary {
 }
 
 pub fn default_target_dir() -> PathBuf {
-    let preferred = PathBuf::from(PREFERRED_TARGET);
-    if preferred.is_dir() {
-        return preferred;
+    let sibling = crate::config::get_app_dir().join(crate::config::ZapretEngine::Zapret2.workspace_folder());
+    if sibling.is_dir() {
+        return sibling;
     }
 
     let workspace = crate::config::ZapretEngine::Zapret2.workspace_dir();
