@@ -65,6 +65,10 @@ impl ZapretEngine {
         self.workspace_dir().join("presets")
     }
 
+    pub fn profiles_dir(&self) -> std::path::PathBuf {
+        self.workspace_dir().join("profiles")
+    }
+
     pub fn binary_path(&self) -> std::path::PathBuf {
         get_cache_dir().join("bin").join(self.binary_name())
     }

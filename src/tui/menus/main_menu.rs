@@ -139,15 +139,19 @@ pub fn render(app: &AppState) -> (Vec<ListItem<'static>>, String, usize) {
         Some(app.selected_backend.to_string()),
     );
 
+    let ipset_value = if crate::ipset::engine_uses_global_ipset_mode(&app.engine) {
+        app.available_ipset_modes
+            .get(app.selected_ipset_mode)
+            .map(|m| m.to_string())
+            .unwrap_or_else(|| rust_i18n::t!("val_none").into_owned())
+    } else {
+        crate::ipset::legacy_mode_notice()
+    };
+
     b.push(
         app.main_menu == MainMenuState::IpsetMode,
         rust_i18n::t!("menu_main_ipset").into_owned(),
-        Some(
-            app.available_ipset_modes
-                .get(app.selected_ipset_mode)
-                .map(|m| m.to_string())
-                .unwrap_or_else(|| rust_i18n::t!("val_none").into_owned()),
-        ),
+        Some(ipset_value),
     );
 
     b.push(
@@ -166,6 +170,14 @@ pub fn render(app: &AppState) -> (Vec<ListItem<'static>>, String, usize) {
         rust_i18n::t!("menu_main_lists").into_owned(),
         None,
     );
+
+    if app.engine.uses_presets() {
+        b.push(
+            app.main_menu == MainMenuState::StrategyEditor,
+            rust_i18n::t!("menu_main_strategy_editor").into_owned(),
+            None,
+        );
+    }
 
     b.push(
         app.main_menu == MainMenuState::Autotune,

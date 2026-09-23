@@ -91,6 +91,22 @@ pub fn determine_current_mode() -> IpsetMode {
     IpsetMode::Custom
 }
 
+pub fn engine_uses_global_ipset_mode(engine: &crate::config::ZapretEngine) -> bool {
+    matches!(engine, crate::config::ZapretEngine::Zapret1)
+}
+
+pub fn legacy_mode_notice() -> String {
+    rust_i18n::t!("ipset_z2_per_profile").into_owned()
+}
+
+pub fn get_available_modes_for(engine: &crate::config::ZapretEngine) -> Vec<IpsetMode> {
+    if !engine_uses_global_ipset_mode(engine) {
+        return Vec::new();
+    }
+
+    get_available_modes()
+}
+
 pub fn get_available_modes() -> Vec<IpsetMode> {
     if !crate::download::check_strategies_installed() {
         return vec![IpsetMode::None];

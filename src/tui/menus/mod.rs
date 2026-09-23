@@ -11,5 +11,6 @@ pub mod main_menu;
 pub mod service_conflict_menu;
 pub mod service_menu;
 pub mod settings_menu;
+pub mod strategy_editor_menu;
 pub mod strategy_menu;
 pub mod tag_menu;

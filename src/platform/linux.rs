@@ -1,5 +1,3 @@
-#![cfg(target_os = "linux")]
-
 use std::os::unix::process::CommandExt;
 use std::path::PathBuf;
 use std::process::Command;

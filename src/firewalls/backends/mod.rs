@@ -15,13 +15,16 @@ macro_rules! define_backends {
             )+
         }
 
-        impl LinuxBackend {
-            pub fn to_string(&self) -> String {
-                match self {
+        impl std::fmt::Display for LinuxBackend {
+            fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                let label = match self {
                     $(LinuxBackend::$variant => rust_i18n::t!($name).into_owned()),+
-                }
+                };
+                formatter.write_str(&label)
             }
+        }
 
+        impl LinuxBackend {
             pub fn variants() -> Vec<LinuxBackend> {
                 let all = vec![$(LinuxBackend::$variant),+];
                 all.into_iter().filter(|b| b.available()).collect()

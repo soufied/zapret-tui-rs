@@ -233,6 +233,40 @@ pub fn log_stop(stop_output: &[String]) {
     }
 }
 
+pub fn log_error(message: &str) {
+    let log_file = crate::config::get_cache_dir().join("logs").join("zapret.log");
+
+    if let Some(parent) = log_file.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+
+    let mut file = match OpenOptions::new().create(true).append(true).open(&log_file) {
+        Ok(f) => f,
+        Err(_) => {
+            eprintln!("[error] {}", message);
+            return;
+        }
+    };
+
+    let _ = writeln!(file, "[error] {} | {}", timestamp(), message);
+    eprintln!("[error] {}", message);
+}
+
+pub fn log_info(message: &str) {
+    let log_file = crate::config::get_cache_dir().join("logs").join("zapret.log");
+
+    if let Some(parent) = log_file.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+
+    let mut file = match OpenOptions::new().create(true).append(true).open(&log_file) {
+        Ok(f) => f,
+        Err(_) => return,
+    };
+
+    let _ = writeln!(file, "[info] {} | {}", timestamp(), message);
+}
+
 fn timestamp() -> String {
     #[cfg(target_os = "linux")]
     if let Ok(output) = Command::new("date").args(["+%Y-%m-%d %H:%M:%S"]).output() {

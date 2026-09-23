@@ -6,6 +6,7 @@ mod firewalls;
 pub mod inits;
 mod platform;
 
+mod ingest;
 mod ipset;
 mod logger;
 mod runner;
