@@ -1,5 +1,3 @@
-#![cfg(target_os = "windows")]
-
 use std::env;
 use std::path::PathBuf;
 use std::process::Command;
@@ -84,6 +82,10 @@ fn run_powershell(script: &str) -> bool {
         .status()
         .map(|s| s.success())
         .unwrap_or(false)
+}
+
+pub fn is_elevated_process() -> bool {
+    is_elevated()
 }
 
 fn is_elevated() -> bool {

@@ -345,6 +345,10 @@ fn screen_body(app: &AppState) -> (Vec<ratatui::widgets::ListItem<'static>>, Str
         ActiveScreen::ServiceSubmenu => menus::service_menu::render(app),
         ActiveScreen::ServiceConflictSubmenu => menus::service_conflict_menu::render(app),
         ActiveScreen::ListsEditorSubmenu => menus::lists_menu::render(&app.lists_files, app.lists_menu_index),
+        ActiveScreen::StrategyEditorSubmenu => {
+            let active_name = app.strategies.get(app.selected_strategy).map(|s| s.as_str());
+            menus::strategy_editor_menu::render(&app.strategy_editor_files, app.strategy_editor_index, active_name)
+        }
         ActiveScreen::AutotuneSubmenu => {
             if app.autotune_running {
                 menus::autotune_menu::render_header()
@@ -366,6 +370,9 @@ fn screen_body(app: &AppState) -> (Vec<ratatui::widgets::ListItem<'static>>, Str
             menus::autotune_menu::render_strategies(app, app.autotune_strat_index)
         }
         ActiveScreen::AutotuneResultsSubmenu => menus::autotune_menu::render_results(app, app.autotune_results_index),
+        ActiveScreen::AutotuneServiceMatrixSubmenu => {
+            menus::autotune_menu::render_service_matrix(app, app.service_matrix_index)
+        }
         ActiveScreen::SettingsSubmenu => menus::settings_menu::render(app),
         ActiveScreen::SettingsEditorSubmenu => menus::settings_menu::render_editor(app),
         ActiveScreen::LogViewer => menus::log_menu::render(&app.log_lines, app.log_scroll),
@@ -408,35 +415,87 @@ fn draw(f: &mut Frame, app: &AppState) {
         format!("  ·  {}/{}", selected_index.min(items.len() - 1) + 1, items.len())
     };
 
-    let list_block = Block::default()
-        .title(Span::styled(format!("{}{}", block_title, counter), Theme::block_title()))
-        .borders(Borders::ALL)
-        .border_type(BorderType::Rounded)
-        .border_style(Theme::border());
+    if app.active_screen == ActiveScreen::StrategyEditorSubmenu {
+        let columns = Layout::default()
+            .direction(Direction::Horizontal)
+            .constraints([Constraint::Percentage(40), Constraint::Percentage(60)].as_ref())
+            .split(chunks[2]);
 
-    let inner = list_block.inner(chunks[2]);
-    f.render_widget(list_block, chunks[2]);
+        let list_block = Block::default()
+            .title(Span::styled(format!("{}{}", block_title, counter), Theme::block_title()))
+            .borders(Borders::ALL)
+            .border_type(BorderType::Rounded)
+            .border_style(Theme::border());
+        let list_area = list_block.inner(columns[0]);
+        f.render_widget(list_block, columns[0]);
 
-    let list_area = if app.active_screen == ActiveScreen::AutotuneSubmenu && !app.autotune_running {
-        let sub = Layout::default()
-            .direction(Direction::Vertical)
-            .constraints([Constraint::Length(2), Constraint::Min(1)].as_ref())
-            .split(inner);
-        let warning = Paragraph::new(Line::from(Span::styled(
-            rust_i18n::t!("autotune_warning_disable").into_owned(),
-            Theme::warning(),
-        )))
-        .alignment(Alignment::Center);
-        f.render_widget(warning, sub[0]);
-        sub[1]
+        let list = List::new(items).highlight_style(Style::default().add_modifier(Modifier::ITALIC));
+        let mut list_state = ListState::default();
+        list_state.select(Some(selected_index));
+        f.render_stateful_widget(list, list_area, &mut list_state);
+
+        let inspector_block = Block::default()
+            .title(Span::styled(
+                rust_i18n::t!("tui_title_strategy_inspector").into_owned(),
+                Theme::block_title(),
+            ))
+            .borders(Borders::ALL)
+            .border_type(BorderType::Rounded)
+            .border_style(Theme::border());
+        let inspector_area = inspector_block.inner(columns[1]);
+        f.render_widget(inspector_block, columns[1]);
+
+        let inspector_lines: Vec<Line> = match &app.strategy_editor_inspection {
+            Some(inspection) => menus::strategy_editor_menu::render_inspector(inspection)
+                .into_iter()
+                .map(Line::from)
+                .collect(),
+            None => vec![Line::from(rust_i18n::t!("tui_strategy_inspector_empty").into_owned())],
+        };
+        let inspector = Paragraph::new(inspector_lines).wrap(Wrap { trim: true });
+        f.render_widget(inspector, inspector_area);
+
+        if app.strategy_editor_new_name_editing {
+            let prompt = Paragraph::new(Line::from(format!(
+                "{}{}",
+                rust_i18n::t!("prompt_strat_editor_new_name"),
+                app.strategy_editor_new_name_buf
+            )))
+            .alignment(Alignment::Center)
+            .style(Theme::status_message());
+            f.render_widget(prompt, list_area);
+        }
     } else {
-        inner
-    };
+        let list_block = Block::default()
+            .title(Span::styled(format!("{}{}", block_title, counter), Theme::block_title()))
+            .borders(Borders::ALL)
+            .border_type(BorderType::Rounded)
+            .border_style(Theme::border());
 
-    let list = List::new(items).highlight_style(Style::default().add_modifier(Modifier::ITALIC));
-    let mut list_state = ListState::default();
-    list_state.select(Some(selected_index));
-    f.render_stateful_widget(list, list_area, &mut list_state);
+        let inner = list_block.inner(chunks[2]);
+        f.render_widget(list_block, chunks[2]);
+
+        let list_area = if app.active_screen == ActiveScreen::AutotuneSubmenu && !app.autotune_running {
+            let sub = Layout::default()
+                .direction(Direction::Vertical)
+                .constraints([Constraint::Length(2), Constraint::Min(1)].as_ref())
+                .split(inner);
+            let warning = Paragraph::new(Line::from(Span::styled(
+                rust_i18n::t!("autotune_warning_disable").into_owned(),
+                Theme::warning(),
+            )))
+            .alignment(Alignment::Center);
+            f.render_widget(warning, sub[0]);
+            sub[1]
+        } else {
+            inner
+        };
+
+        let list = List::new(items).highlight_style(Style::default().add_modifier(Modifier::ITALIC));
+        let mut list_state = ListState::default();
+        list_state.select(Some(selected_index));
+        f.render_stateful_widget(list, list_area, &mut list_state);
+    }
 
     let help_block = Block::default()
         .borders(Borders::ALL)
@@ -489,6 +548,69 @@ fn handle_key(app: &mut AppState, key: KeyEvent) {
             KeyCode::Esc => {
                 app.editor_custom_editing = false;
                 app.editor_custom_buf.clear();
+                app.status_message = None;
+            }
+            _ => {}
+        }
+        return;
+    }
+
+    if app.active_screen == ActiveScreen::StrategyEditorSubmenu {
+        if app.strategy_editor_new_name_editing {
+            match key.code {
+                KeyCode::Char(c) => app.strategy_editor_new_name_buf.push(c),
+                KeyCode::Backspace => {
+                    app.strategy_editor_new_name_buf.pop();
+                }
+                KeyCode::Enter => app.commit_new_strategy_file(),
+                KeyCode::Esc => {
+                    app.strategy_editor_new_name_editing = false;
+                    app.strategy_editor_new_name_buf.clear();
+                    app.status_message = None;
+                }
+                _ => {}
+            }
+            return;
+        }
+
+        if app.strategy_editor_delete_confirm {
+            match key.code {
+                KeyCode::Char('y') | KeyCode::Char('Y') => app.confirm_delete_selected_strategy_file(),
+                KeyCode::Char('n') | KeyCode::Char('N') | KeyCode::Esc => {
+                    app.strategy_editor_delete_confirm = false;
+                    app.status_message = None;
+                }
+                _ => {}
+            }
+            return;
+        }
+
+        match key.code {
+            KeyCode::Up | KeyCode::Char('k') => app.prev_menu(),
+            KeyCode::Down | KeyCode::Char('j') => app.next_menu(),
+            KeyCode::Home => {
+                app.strategy_editor_index = 0;
+                app.refresh_strategy_editor_inspection();
+            }
+            KeyCode::End => {
+                app.strategy_editor_index = app.strategy_editor_files.len();
+                app.refresh_strategy_editor_inspection();
+            }
+            KeyCode::Char('e') | KeyCode::Enter => {
+                if app.strategy_editor_index < app.strategy_editor_files.len() {
+                    app.open_highlighted_strategy_file();
+                } else {
+                    app.active_screen = ActiveScreen::Main;
+                    app.status_message = None;
+                }
+            }
+            KeyCode::Char('a') | KeyCode::Char(' ') => app.activate_selected_strategy_file(),
+            KeyCode::Char('s') => app.should_sync_community_strategies = true,
+            KeyCode::Char('n') => app.begin_new_strategy_file(),
+            KeyCode::Char('d') => app.duplicate_selected_strategy_file(),
+            KeyCode::Char('x') | KeyCode::Delete => app.begin_delete_selected_strategy_file(),
+            KeyCode::Char('q') | KeyCode::Esc => {
+                app.active_screen = ActiveScreen::Main;
                 app.status_message = None;
             }
             _ => {}
@@ -550,6 +672,7 @@ fn handle_key(app: &mut AppState, key: KeyEvent) {
             | ActiveScreen::AutotuneZ2PresetsSubmenu
             | ActiveScreen::AutotuneZ2TargetsSubmenu
             | ActiveScreen::AutotuneResultsSubmenu
+            | ActiveScreen::AutotuneServiceMatrixSubmenu
             | ActiveScreen::AutotuneEditDomainsSubmenu => {
                 app.active_screen = ActiveScreen::AutotuneSubmenu;
             }
@@ -752,21 +875,35 @@ pub fn run_tui(app: &mut AppState, reader: &EventReader) -> Result<(), io::Error
         if let Some(file_path) = app.should_open_editor.take() {
             let return_screen = app.active_screen;
 
-            let opened = with_terminal_suspended(&mut terminal, reader, || crate::utils::open_editor(&file_path))?;
+            let graphical = crate::utils::resolve_editor()
+                .map(|editor| {
+                    crate::platform::launcher::classify_editor(&editor.command)
+                        == crate::platform::launcher::EditorKind::Graphical
+                })
+                .unwrap_or(false);
+
+            let opened = if graphical {
+                crate::utils::open_editor(&file_path)
+            } else {
+                with_terminal_suspended(&mut terminal, reader, || crate::utils::open_editor(&file_path))?
+            };
+
+            let file_name = std::path::Path::new(&file_path)
+                .file_name()
+                .unwrap_or_default()
+                .to_string_lossy()
+                .into_owned();
 
             match opened {
-                Ok(_) => {
-                    app.status_message = Some(format!(
-                        "{}{}",
-                        rust_i18n::t!("msg_closed_editor"),
-                        std::path::Path::new(&file_path)
-                            .file_name()
-                            .unwrap_or_default()
-                            .to_string_lossy()
-                    ));
+                Ok(crate::utils::EditorSession::Detached(command)) => {
+                    app.status_message = Some(format!("{} -> {}", command, file_name));
                 }
-                Err(_) => {
-                    app.show_error(rust_i18n::t!("settings_editor_none").into_owned());
+                Ok(crate::utils::EditorSession::Closed(_)) => {
+                    app.status_message =
+                        Some(format!("{}{}", rust_i18n::t!("msg_closed_editor"), file_name));
+                }
+                Err(error) => {
+                    app.show_error(error.to_string());
                 }
             }
 
@@ -774,6 +911,112 @@ pub fn run_tui(app: &mut AppState, reader: &EventReader) -> Result<(), io::Error
             if return_screen == ActiveScreen::ListsEditorSubmenu {
                 app.refresh_ipset_status();
             }
+            if return_screen == ActiveScreen::StrategyEditorSubmenu {
+                app.refresh_strategy_editor_inspection();
+            }
+            dirty = true;
+        }
+
+        if app.should_sync_community_strategies {
+            app.should_sync_community_strategies = false;
+
+            match crate::ingest::sync_community_strategies(None) {
+                Ok(summary) => {
+                    app.status_message = Some(summary.render().join("\n"));
+                    app.refresh_strategy_editor_files();
+                    app.refresh_strategy_editor_inspection();
+                    app.reload_strategies();
+                    app.reload_z2_presets();
+                    app.reload_z2_lists();
+                }
+                Err(error) => app.show_error(error),
+            }
+            dirty = true;
+        }
+
+        if app.should_run_service_matrix {
+            app.should_run_service_matrix = false;
+            app.autotune_running = true;
+
+            begin_external_output(&mut terminal)?;
+
+            println!("{}", rust_i18n::t!("autotune_matrix_running"));
+            println!();
+
+            crate::autotune::reset_cancel();
+            drain_events(rx);
+            let start_time = std::time::Instant::now();
+
+            let live_label = app.service_matrix_label();
+            let profiles = app.service_matrix_profiles();
+
+            println!("  {} {}", rust_i18n::t!("autotune_matrix_probing"), live_label);
+            let _ = io::stdout().flush();
+            let reports = crate::autotune::probe_all();
+            let mut rows = vec![crate::autotune::MatrixRow::from_reports(&live_label, &reports)];
+
+            for profile in &profiles {
+                if crate::autotune::is_cancelled() {
+                    break;
+                }
+                println!("  {} {}", rust_i18n::t!("autotune_matrix_probing"), profile);
+                let _ = io::stdout().flush();
+                rows.extend(crate::autotune::run_matrix(std::slice::from_ref(profile)));
+
+                while let Ok(event) = rx.try_recv() {
+                    if let Event::Key(key) = event {
+                        if key.code == KeyCode::Char('q') || key.code == KeyCode::Char('Q') || key.code == KeyCode::Esc
+                        {
+                            crate::autotune::trigger_cancel();
+                        }
+                    }
+                }
+            }
+
+            let elapsed_ms = start_time.elapsed().as_millis();
+            let cancelled = crate::autotune::is_cancelled();
+            crate::autotune::reset_cancel();
+
+            println!();
+            for line in crate::autotune::render_matrix(&rows) {
+                println!("  {}", line);
+            }
+            println!();
+            for report in &reports {
+                println!(
+                    "  {}: {} [{}ms] {}",
+                    report.service,
+                    report.status.symbol(),
+                    report.elapsed_ms,
+                    report.detail
+                );
+            }
+            println!();
+            if cancelled {
+                println!("{}", rust_i18n::t!("autotune_matrix_cancelled"));
+            } else {
+                println!("{}", rust_i18n::t!("autotune_matrix_done"));
+            }
+            println!();
+            println!("{}", rust_i18n::t!("msg_dl_key"));
+
+            wait_for_key(rx)?;
+            end_external_output(&mut terminal, rx)?;
+
+            let all_clear = rows.iter().all(|row| row.unblocks_everything());
+            app.service_matrix_rows = rows;
+            app.service_matrix_reports = reports;
+            app.service_matrix_elapsed_ms = elapsed_ms;
+            app.service_matrix_index = 0;
+            app.autotune_running = false;
+            app.active_screen = ActiveScreen::AutotuneServiceMatrixSubmenu;
+            app.status_message = Some(if cancelled {
+                rust_i18n::t!("autotune_matrix_cancelled").into_owned()
+            } else if all_clear {
+                rust_i18n::t!("autotune_matrix_all_ok").into_owned()
+            } else {
+                rust_i18n::t!("autotune_matrix_blocked").into_owned()
+            });
             dirty = true;
         }
 

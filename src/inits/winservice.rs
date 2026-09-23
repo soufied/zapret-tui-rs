@@ -1,5 +1,3 @@
-#![cfg(target_os = "windows")]
-
 use crate::inits::ServiceManager;
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};

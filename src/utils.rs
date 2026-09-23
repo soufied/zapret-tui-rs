@@ -117,10 +117,6 @@ pub fn ensure_wait_flag(command: &str, mut args: Vec<String>) -> Vec<String> {
     args
 }
 
-fn is_detaching_editor(command: &str) -> bool {
-    wait_rule(command).is_some()
-}
-
 pub fn candidate_args(command: &str) -> Vec<String> {
     EDITOR_CANDIDATES
         .iter()
@@ -211,7 +207,6 @@ pub struct ResolvedEditor {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
-#[allow(dead_code)]
 pub enum EditorSource {
     Configured,
     Environment,
@@ -419,58 +414,81 @@ pub fn get_lists_files() -> Vec<String> {
     files
 }
 
-const GUI_STARTUP_GRACE_SECS: u64 = 10;
+use crate::platform::launcher::{classify_editor, launch_editor_process, EditorKind, LaunchOutcome};
 
-fn launch_editor(command: &str, args: &[String], file_path: &str) -> Option<std::process::ExitStatus> {
-    let started = std::time::Instant::now();
-    let status = std::process::Command::new(command)
-        .args(args)
-        .arg(file_path)
-        .status()
-        .ok()?;
-
-    let failed_at_startup = !status.success()
-        && is_detaching_editor(command)
-        && started.elapsed() < std::time::Duration::from_secs(GUI_STARTUP_GRACE_SECS);
-    if failed_at_startup {
-        return None;
-    }
-
-    Some(status)
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum EditorSession {
+    Closed(i32),
+    Detached(String),
 }
 
-pub fn open_editor(file_path: &str) -> std::io::Result<std::process::ExitStatus> {
+fn launch_editor(command: &str, args: &[String], file_path: &str) -> Result<EditorSession, String> {
+    match launch_editor_process(command, args, file_path) {
+        Ok(LaunchOutcome::Completed(code)) => Ok(EditorSession::Closed(code)),
+        Ok(LaunchOutcome::Detached) => Ok(EditorSession::Detached(command.to_string())),
+        Err(error) => Err(error.to_string()),
+    }
+}
+
+pub fn open_editor(file_path: &str) -> std::io::Result<EditorSession> {
     if crate::config::load_backup_lists() {
         let _ = backup_file(file_path);
     }
 
+    let mut failures: Vec<String> = Vec::new();
     let mut tried: Vec<String> = Vec::new();
 
     if let Some(editor) = resolve_editor() {
-        if let Some(status) = launch_editor(&editor.command, &editor.args, file_path) {
-            return Ok(status);
+        crate::logger::log_info(&format!(
+            "Launching editor '{}' resolved from {:?}",
+            editor.command, editor.source
+        ));
+        match launch_editor(&editor.command, &editor.args, file_path) {
+            Ok(session) => return Ok(session),
+            Err(reason) => {
+                crate::logger::log_error(&format!("editor launch failed: {}", reason));
+                failures.push(reason);
+            }
         }
         tried.push(editor.command);
     }
+
+    let configured_kind = tried
+        .first()
+        .map(|command| classify_editor(command))
+        .unwrap_or(EditorKind::Terminal);
 
     for candidate in EDITOR_CANDIDATES {
         if tried.iter().any(|t| t.as_str() == candidate.command) || !editor_is_installed(candidate.command) {
             continue;
         }
+
+        if configured_kind == EditorKind::Graphical && classify_editor(candidate.command) == EditorKind::Terminal {
+            continue;
+        }
+
         let args = ensure_wait_flag(
             candidate.command,
             candidate.args.iter().map(|a| a.to_string()).collect(),
         );
-        if let Some(status) = launch_editor(candidate.command, &args, file_path) {
-            return Ok(status);
+
+        match launch_editor(candidate.command, &args, file_path) {
+            Ok(session) => return Ok(session),
+            Err(reason) => {
+                crate::logger::log_error(&format!("editor launch failed: {}", reason));
+                failures.push(reason);
+            }
         }
         tried.push(candidate.command.to_string());
     }
 
-    Err(std::io::Error::new(
-        std::io::ErrorKind::NotFound,
-        "No suitable editor found",
-    ))
+    let detail = if failures.is_empty() {
+        "No suitable editor found".to_string()
+    } else {
+        format!("No editor could be launched: {}", failures.join("; "))
+    };
+
+    Err(std::io::Error::new(std::io::ErrorKind::NotFound, detail))
 }
 
 pub fn read_log_tail(path: &Path, max_lines: usize) -> Vec<String> {

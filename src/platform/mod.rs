@@ -1,3 +1,5 @@
+pub mod launcher;
+
 #[cfg(target_os = "windows")]
 pub mod windows;
 

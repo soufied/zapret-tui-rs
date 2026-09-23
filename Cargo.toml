@@ -1,6 +1,6 @@
 [package]
 name = "zapret-rust"
-version = "2.2.0"
+version = "2.3.0"
 edition = "2021"
 license = "MIT"
 description = "Zapret-Rust TUI implementation for DPI bypass"
@@ -10,11 +10,9 @@ repository = "https://github.com/Sergeydigl3/zapret-discord-youtube-rust"
 clap = { version = "4.4", features = ["derive"] }
 inquire = "0.6"
 ctrlc = "3.4"
-nix = { version = "0.27", features = ["signal"] }
 ratatui = "0.26.1"
 crossterm = "0.27.0"
 regex = "1.10.2"
-nftables = "0.6.3"
 serde_json = "1.0"
 ureq = "2.9.1"
 tar = "0.4.46"
@@ -26,13 +24,34 @@ aes = "0.8"
 aes-gcm = "0.10"
 hmac = "0.12"
 sha2 = "0.10"
+thiserror = "1.0"
+
+[target.'cfg(target_os = "linux")'.dependencies]
+nix = { version = "0.27", features = ["signal"] }
+nftables = "0.6.3"
 
 [target.'cfg(target_os = "windows")'.dependencies]
 windows-service = "0.6.0"
+windows-sys = { version = "0.59", features = [
+    "Win32_Foundation",
+    "Win32_Security",
+    "Win32_Storage_FileSystem",
+    "Win32_System_Console",
+    "Win32_System_Environment",
+    "Win32_System_Threading",
+    "Win32_UI_WindowsAndMessaging",
+] }
+
+[build-dependencies]
+winresource = "0.1"
 
 [[bin]]
 name = "zapret-rust"
 path = "src/main.rs"
 
-
-
+[profile.release]
+opt-level = "z"
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true
