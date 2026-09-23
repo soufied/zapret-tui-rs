@@ -25,9 +25,7 @@ impl std::fmt::Display for IpsetMode {
 
 pub fn get_ipset_dir() -> PathBuf {
     let engine = crate::runner::active_engine();
-    let exe_dir = std::env::current_exe()
-        .map(|p| p.parent().unwrap().to_path_buf())
-        .unwrap_or_else(|_| std::env::current_dir().unwrap_or_default());
+    let exe_dir = crate::config::get_app_dir();
 
     let workspace = engine.workspace_dir();
     let base_dir = if workspace.exists() {
