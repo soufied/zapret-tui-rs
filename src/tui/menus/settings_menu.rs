@@ -1,3 +1,4 @@
+use crate::tui::menus::main_menu::pad_to_display_width;
 use crate::tui::state::{AppState, EditorKind, SettingsMenuState};
 use crate::tui::theme::{presence_marker, Theme};
 use ratatui::{
@@ -5,7 +6,7 @@ use ratatui::{
     widgets::ListItem,
 };
 
-const LABEL_WIDTH: usize = 26;
+const LABEL_WIDTH: usize = 30;
 
 fn row(label: String, value: Option<Span<'static>>, selected: bool) -> ListItem<'static> {
     let marker = if selected { "▸ " } else { "  " };
@@ -16,7 +17,7 @@ fn row(label: String, value: Option<Span<'static>>, selected: bool) -> ListItem<
     };
 
     let mut spans = vec![Span::styled(
-        format!("{}{:<width$}", marker, label, width = LABEL_WIDTH),
+        format!("{}{}", marker, pad_to_display_width(&label, LABEL_WIDTH)),
         label_style,
     )];
     if let Some(value) = value {

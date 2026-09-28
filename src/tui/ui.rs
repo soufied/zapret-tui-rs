@@ -446,19 +446,31 @@ fn draw(f: &mut Frame, app: &AppState) {
         f.render_widget(inspector_block, columns[1]);
 
         let inspector_lines: Vec<Line> = match &app.strategy_editor_inspection {
-            Some(inspection) => menus::strategy_editor_menu::render_inspector(inspection)
-                .into_iter()
-                .map(Line::from)
-                .collect(),
+            Some(inspection) => {
+                let read_only = app
+                    .strategy_editor_files
+                    .get(app.strategy_editor_index)
+                    .map(|entry| entry.read_only)
+                    .unwrap_or(false);
+                menus::strategy_editor_menu::render_editor_inspector(inspection, read_only)
+                    .into_iter()
+                    .map(Line::from)
+                    .collect()
+            }
             None => vec![Line::from(rust_i18n::t!("tui_strategy_inspector_empty").into_owned())],
         };
         let inspector = Paragraph::new(inspector_lines).wrap(Wrap { trim: true });
         f.render_widget(inspector, inspector_area);
 
         if app.strategy_editor_new_name_editing {
+            let prompt_key = if app.strategy_editor_clone_source.is_some() {
+                "prompt_strat_editor_clone_name"
+            } else {
+                "prompt_strat_editor_new_name"
+            };
             let prompt = Paragraph::new(Line::from(format!(
                 "{}{}",
-                rust_i18n::t!("prompt_strat_editor_new_name"),
+                rust_i18n::t!(prompt_key),
                 app.strategy_editor_new_name_buf
             )))
             .alignment(Alignment::Center)
@@ -563,11 +575,7 @@ fn handle_key(app: &mut AppState, key: KeyEvent) {
                     app.strategy_editor_new_name_buf.pop();
                 }
                 KeyCode::Enter => app.commit_new_strategy_file(),
-                KeyCode::Esc => {
-                    app.strategy_editor_new_name_editing = false;
-                    app.strategy_editor_new_name_buf.clear();
-                    app.status_message = None;
-                }
+                KeyCode::Esc => app.cancel_new_strategy_file(),
                 _ => {}
             }
             return;
@@ -875,17 +883,30 @@ pub fn run_tui(app: &mut AppState, reader: &EventReader) -> Result<(), io::Error
         if let Some(file_path) = app.should_open_editor.take() {
             let return_screen = app.active_screen;
 
-            let graphical = crate::utils::resolve_editor()
-                .map(|editor| {
-                    crate::platform::launcher::classify_editor(&editor.command)
-                        == crate::platform::launcher::EditorKind::Graphical
-                })
-                .unwrap_or(false);
+            let resolution = crate::utils::resolve_editor_detailed();
+            if let Some(skipped) = &resolution.skipped_configured {
+                app.status_message = Some(format!(
+                    "{}{}{}",
+                    rust_i18n::t!("msg_editor_unavailable_prefix"),
+                    skipped,
+                    rust_i18n::t!("msg_editor_unavailable_suffix")
+                ));
+            }
 
-            let opened = if graphical {
-                crate::utils::open_editor(&file_path)
+            let needs_terminal = !matches!(
+                resolution
+                    .editor
+                    .as_ref()
+                    .map(|editor| crate::platform::launcher::classify_editor(&editor.command)),
+                Some(crate::platform::launcher::EditorKind::Graphical)
+            );
+
+            let opened = if needs_terminal {
+                with_terminal_suspended(&mut terminal, reader, || {
+                    crate::utils::open_editor_detailed(&file_path)
+                })?
             } else {
-                with_terminal_suspended(&mut terminal, reader, || crate::utils::open_editor(&file_path))?
+                crate::utils::open_editor_detailed(&file_path)
             };
 
             let file_name = std::path::Path::new(&file_path)
@@ -895,13 +916,15 @@ pub fn run_tui(app: &mut AppState, reader: &EventReader) -> Result<(), io::Error
                 .into_owned();
 
             match opened {
-                Ok(crate::utils::EditorSession::Detached(command)) => {
-                    app.status_message = Some(format!("{} -> {}", command, file_name));
-                }
-                Ok(crate::utils::EditorSession::Closed(_)) => {
-                    app.status_message =
-                        Some(format!("{}{}", rust_i18n::t!("msg_closed_editor"), file_name));
-                }
+                Ok(launch) => match launch.session {
+                    crate::utils::EditorSession::Detached(command) => {
+                        app.status_message = Some(format!("{} -> {}", command, file_name));
+                    }
+                    crate::utils::EditorSession::Closed(_) => {
+                        app.status_message =
+                            Some(format!("{}{}", rust_i18n::t!("msg_closed_editor"), file_name));
+                    }
+                },
                 Err(error) => {
                     app.show_error(error.to_string());
                 }

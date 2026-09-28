@@ -150,32 +150,26 @@ fn is_executable(path: &Path) -> bool {
     }
 }
 
-pub fn find_in_path(command: &str) -> Option<PathBuf> {
-    let command = command.trim();
-    if command.is_empty() {
-        return None;
+fn windows_path_extensions() -> Vec<String> {
+    let mut exts = vec![String::new()];
+    if let Ok(pathext) = std::env::var("PATHEXT") {
+        for ext in pathext.split(';') {
+            if !ext.trim().is_empty() {
+                exts.push(ext.trim().to_lowercase());
+            }
+        }
+    } else {
+        exts.push(".exe".to_string());
     }
+    exts
+}
 
-    let direct = Path::new(command);
-    if direct.components().count() > 1 || direct.is_absolute() {
-        return is_executable(direct).then(|| direct.to_path_buf());
-    }
-
+fn search_path_env(command: &str) -> Option<PathBuf> {
     let raw_path = std::env::var_os("PATH")?;
     let raw_path = raw_path.to_string_lossy().into_owned();
 
     let extensions: Vec<String> = if cfg!(target_os = "windows") {
-        let mut exts = vec![String::new()];
-        if let Ok(pathext) = std::env::var("PATHEXT") {
-            for ext in pathext.split(';') {
-                if !ext.trim().is_empty() {
-                    exts.push(ext.trim().to_lowercase());
-                }
-            }
-        } else {
-            exts.push(".exe".to_string());
-        }
-        exts
+        windows_path_extensions()
     } else {
         vec![String::new()]
     };
@@ -193,6 +187,139 @@ pub fn find_in_path(command: &str) -> Option<PathBuf> {
     }
 
     None
+}
+
+#[cfg(target_os = "windows")]
+fn well_known_install_roots() -> Vec<PathBuf> {
+    let mut roots = Vec::new();
+    for var in ["LOCALAPPDATA", "PROGRAMFILES", "PROGRAMFILES(X86)", "PROGRAMW6432"] {
+        if let Some(value) = std::env::var_os(var) {
+            let path = PathBuf::from(value);
+            if !path.as_os_str().is_empty() {
+                roots.push(path);
+            }
+        }
+    }
+    if roots.is_empty() {
+        roots.push(PathBuf::from("C:\\Program Files"));
+        roots.push(PathBuf::from("C:\\Program Files (x86)"));
+    }
+    roots
+}
+
+#[cfg(target_os = "windows")]
+fn well_known_candidates(stem: &str) -> Vec<PathBuf> {
+    let roots = well_known_install_roots();
+    let mut candidates = Vec::new();
+
+    let relative: &[&str] = match stem {
+        "subl" | "sublime_text" => &[
+            "Sublime Text\\subl.exe",
+            "Sublime Text\\sublime_text.exe",
+            "Sublime Text 3\\subl.exe",
+            "Sublime Text 3\\sublime_text.exe",
+        ],
+        "code" => &[
+            "Microsoft VS Code\\bin\\code.cmd",
+            "Microsoft VS Code\\Code.exe",
+            "Programs\\Microsoft VS Code\\bin\\code.cmd",
+            "Programs\\Microsoft VS Code\\Code.exe",
+        ],
+        "code-insiders" => &[
+            "Microsoft VS Code Insiders\\bin\\code-insiders.cmd",
+            "Microsoft VS Code Insiders\\Code - Insiders.exe",
+            "Programs\\Microsoft VS Code Insiders\\bin\\code-insiders.cmd",
+            "Programs\\Microsoft VS Code Insiders\\Code - Insiders.exe",
+        ],
+        "codium" => &[
+            "VSCodium\\bin\\codium.cmd",
+            "VSCodium\\VSCodium.exe",
+            "Programs\\VSCodium\\bin\\codium.cmd",
+            "Programs\\VSCodium\\VSCodium.exe",
+        ],
+        "notepad++" => &["Notepad++\\notepad++.exe"],
+        "geany" => &["Geany\\bin\\geany.exe"],
+        _ => &[],
+    };
+
+    for root in &roots {
+        for rel in relative {
+            candidates.push(root.join(rel));
+        }
+    }
+
+    candidates
+}
+
+#[cfg(not(target_os = "windows"))]
+fn well_known_candidates(stem: &str) -> Vec<PathBuf> {
+    let mut candidates = Vec::new();
+    let mut roots: Vec<PathBuf> = vec![
+        PathBuf::from("/usr/bin"),
+        PathBuf::from("/usr/local/bin"),
+        PathBuf::from("/snap/bin"),
+        PathBuf::from("/var/lib/flatpak/exports/bin"),
+    ];
+    if let Some(home) = std::env::var_os("HOME") {
+        let home = PathBuf::from(home);
+        roots.push(home.join(".local/bin"));
+        roots.push(home.join(".local/share/flatpak/exports/bin"));
+    }
+    if let Some(sudo_user) = std::env::var_os("SUDO_USER") {
+        if let Some(name) = sudo_user.to_str() {
+            if !name.is_empty() && name != "root" {
+                let user_home = PathBuf::from("/home").join(name);
+                roots.push(user_home.join(".local/bin"));
+                roots.push(user_home.join(".local/share/flatpak/exports/bin"));
+            }
+        }
+    }
+
+    let relative: &[&str] = match stem {
+        "subl" | "sublime_text" => &["subl", "sublime_text"],
+        "code" => &["code", "com.visualstudio.code"],
+        "code-insiders" => &["code-insiders"],
+        "codium" | "vscodium" => &["codium", "vscodium", "com.vscodium.codium"],
+        "gedit" => &["gedit", "org.gnome.gedit", "org.gnome.TextEditor"],
+        "kate" => &["kate", "org.kde.kate"],
+        _ => &[],
+    };
+
+    for root in &roots {
+        for rel in relative {
+            candidates.push(root.join(rel));
+        }
+    }
+
+    candidates
+}
+
+fn search_well_known_locations(command: &str) -> Option<PathBuf> {
+    let stem = crate::platform::launcher::command_stem(command);
+    for candidate in well_known_candidates(&stem) {
+        if is_executable(&candidate) {
+            return Some(candidate);
+        }
+    }
+    None
+}
+
+pub fn find_in_path(command: &str) -> Option<PathBuf> {
+    let command = command.trim();
+    if command.is_empty() {
+        return None;
+    }
+
+    let direct = Path::new(command);
+    if direct.components().count() > 1 || direct.is_absolute() {
+        return is_executable(direct).then(|| direct.to_path_buf());
+    }
+
+    if let Some(found) = search_path_env(command) {
+        return Some(found);
+    }
+
+    search_well_known_locations(command)
 }
 
 pub fn editor_is_installed(command: &str) -> bool {
@@ -213,6 +340,12 @@ pub enum EditorSource {
     Detected,
 }
 
+#[derive(Debug, Clone)]
+pub struct EditorResolution {
+    pub editor: Option<ResolvedEditor>,
+    pub skipped_configured: Option<String>,
+}
+
 fn split_command(raw: &str) -> Option<(String, Vec<String>)> {
     let mut parts = raw.split_whitespace();
     let program = parts.next()?.to_string();
@@ -220,8 +353,10 @@ fn split_command(raw: &str) -> Option<(String, Vec<String>)> {
     Some((program, args))
 }
 
-pub fn resolve_editor() -> Option<ResolvedEditor> {
+pub fn resolve_editor_detailed() -> EditorResolution {
     let configured = crate::config::load_editor();
+    let mut skipped_configured: Option<String> = None;
+
     if !configured.trim().is_empty() {
         if let Some((program, mut args)) = split_command(&configured) {
             if editor_is_installed(&program) {
@@ -229,12 +364,18 @@ pub fn resolve_editor() -> Option<ResolvedEditor> {
                     args = candidate_args(&program);
                 }
                 let args = ensure_wait_flag(&program, args);
-                return Some(ResolvedEditor {
-                    command: program,
-                    args,
-                    source: EditorSource::Configured,
-                });
+                return EditorResolution {
+                    editor: Some(ResolvedEditor {
+                        command: program,
+                        args,
+                        source: EditorSource::Configured,
+                    }),
+                    skipped_configured: None,
+                };
             }
+            skipped_configured = Some(program);
+        } else {
+            skipped_configured = Some(configured.trim().to_string());
         }
     }
 
@@ -250,11 +391,14 @@ pub fn resolve_editor() -> Option<ResolvedEditor> {
                 args = candidate_args(&program);
             }
             let args = ensure_wait_flag(&program, args);
-            return Some(ResolvedEditor {
-                command: program,
-                args,
-                source: EditorSource::Environment,
-            });
+            return EditorResolution {
+                editor: Some(ResolvedEditor {
+                    command: program,
+                    args,
+                    source: EditorSource::Environment,
+                }),
+                skipped_configured,
+            };
         }
     }
 
@@ -264,15 +408,25 @@ pub fn resolve_editor() -> Option<ResolvedEditor> {
                 candidate.command,
                 candidate.args.iter().map(|a| a.to_string()).collect(),
             );
-            return Some(ResolvedEditor {
-                command: candidate.command.to_string(),
-                args,
-                source: EditorSource::Detected,
-            });
+            return EditorResolution {
+                editor: Some(ResolvedEditor {
+                    command: candidate.command.to_string(),
+                    args,
+                    source: EditorSource::Detected,
+                }),
+                skipped_configured,
+            };
         }
     }
 
-    None
+    EditorResolution {
+        editor: None,
+        skipped_configured,
+    }
+}
+
+pub fn resolve_editor() -> Option<ResolvedEditor> {
+    resolve_editor_detailed().editor
 }
 
 pub fn active_editor_label() -> String {
@@ -420,6 +574,13 @@ pub enum EditorSession {
     Detached(String),
 }
 
+#[derive(Debug, Clone)]
+pub struct EditorLaunch {
+    pub session: EditorSession,
+    pub kind: EditorKind,
+    pub command: String,
+}
+
 fn launch_editor(command: &str, args: &[String], file_path: &str) -> Result<EditorSession, String> {
     match launch_editor_process(command, args, file_path) {
         Ok(LaunchOutcome::Completed(code)) => Ok(EditorSession::Closed(code)),
@@ -428,7 +589,7 @@ fn launch_editor(command: &str, args: &[String], file_path: &str) -> Result<Edit
     }
 }
 
-pub fn open_editor(file_path: &str) -> std::io::Result<EditorSession> {
+pub fn open_editor_detailed(file_path: &str) -> std::io::Result<EditorLaunch> {
     if crate::config::load_backup_lists() {
         let _ = backup_file(file_path);
     }
@@ -436,25 +597,44 @@ pub fn open_editor(file_path: &str) -> std::io::Result<EditorSession> {
     let mut failures: Vec<String> = Vec::new();
     let mut tried: Vec<String> = Vec::new();
 
-    if let Some(editor) = resolve_editor() {
+    let resolution = resolve_editor_detailed();
+
+    if let Some(skipped) = &resolution.skipped_configured {
+        let message = format!(
+            "Configured editor '{}' is not available on PATH for this process; falling back to auto-detection",
+            skipped
+        );
+        crate::logger::log_error(&message);
+    }
+
+    let configured_kind = resolution
+        .skipped_configured
+        .as_deref()
+        .map(classify_editor)
+        .or_else(|| resolution.editor.as_ref().map(|editor| classify_editor(&editor.command)))
+        .unwrap_or(EditorKind::Terminal);
+
+    if let Some(editor) = resolution.editor {
         crate::logger::log_info(&format!(
             "Launching editor '{}' resolved from {:?}",
             editor.command, editor.source
         ));
+        let kind = classify_editor(&editor.command);
         match launch_editor(&editor.command, &editor.args, file_path) {
-            Ok(session) => return Ok(session),
+            Ok(session) => {
+                return Ok(EditorLaunch {
+                    session,
+                    kind,
+                    command: editor.command,
+                })
+            }
             Err(reason) => {
-                crate::logger::log_error(&format!("editor launch failed: {}", reason));
-                failures.push(reason);
+                crate::logger::log_error(&format!("editor '{}' failed to launch: {}", editor.command, reason));
+                failures.push(format!("{}: {}", editor.command, reason));
             }
         }
         tried.push(editor.command);
     }
-
-    let configured_kind = tried
-        .first()
-        .map(|command| classify_editor(command))
-        .unwrap_or(EditorKind::Terminal);
 
     for candidate in EDITOR_CANDIDATES {
         if tried.iter().any(|t| t.as_str() == candidate.command) || !editor_is_installed(candidate.command) {
@@ -471,22 +651,33 @@ pub fn open_editor(file_path: &str) -> std::io::Result<EditorSession> {
         );
 
         match launch_editor(candidate.command, &args, file_path) {
-            Ok(session) => return Ok(session),
+            Ok(session) => {
+                return Ok(EditorLaunch {
+                    session,
+                    kind: classify_editor(candidate.command),
+                    command: candidate.command.to_string(),
+                })
+            }
             Err(reason) => {
-                crate::logger::log_error(&format!("editor launch failed: {}", reason));
-                failures.push(reason);
+                crate::logger::log_error(&format!("editor '{}' failed to launch: {}", candidate.command, reason));
+                failures.push(format!("{}: {}", candidate.command, reason));
             }
         }
         tried.push(candidate.command.to_string());
     }
 
     let detail = if failures.is_empty() {
-        "No suitable editor found".to_string()
+        "No suitable editor found on PATH".to_string()
     } else {
         format!("No editor could be launched: {}", failures.join("; "))
     };
 
+    crate::logger::log_error(&detail);
     Err(std::io::Error::new(std::io::ErrorKind::NotFound, detail))
+}
+
+pub fn open_editor(file_path: &str) -> std::io::Result<EditorSession> {
+    open_editor_detailed(file_path).map(|launch| launch.session)
 }
 
 pub fn read_log_tail(path: &Path, max_lines: usize) -> Vec<String> {

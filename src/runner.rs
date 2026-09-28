@@ -133,7 +133,11 @@ fn strategy_file_path(engine: &ZapretEngine, workspace: &Path, strategy_file: &s
         ZapretEngine::Zapret2 => {
             let preset = engine.presets_dir().join(strategy_file);
             if preset.exists() {
-                preset
+                return preset;
+            }
+            let profile = engine.profiles_dir().join(strategy_file);
+            if profile.exists() {
+                profile
             } else {
                 direct
             }
@@ -389,7 +393,7 @@ pub fn prepare(
             )
         }
         ZapretEngine::Zapret2 => {
-            let parsed = strategy::parse_zapret2_preset(path_str, ttl).map_err(|e| format!("parse error: {}", e))?;
+            let parsed = strategy::parse_zapret2_preset(path_str, None).map_err(|e| format!("parse error: {}", e))?;
             let log_params = parsed.args.clone();
             (parsed.tcp_ports, parsed.udp_ports, parsed.args, log_params)
         }

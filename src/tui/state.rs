@@ -122,7 +122,10 @@ impl MainMenuState {
         if self == Self::GamefilterSettings && !engine.supports_game_filter() {
             return false;
         }
-        if self == Self::StrategyEditor && !engine.uses_presets() {
+        if self == Self::TtlAutopick && !engine.supports_ttl_autopick() {
+            return false;
+        }
+        if self == Self::FakesSettings && !engine.supports_active_fakes() {
             return false;
         }
         true
@@ -543,9 +546,10 @@ pub struct AppState {
     pub should_sync_community_strategies: bool,
     pub strategy_editor_files: Vec<crate::tui::menus::strategy_editor_menu::StrategyFileEntry>,
     pub strategy_editor_index: usize,
-    pub strategy_editor_inspection: Option<crate::tui::menus::strategy_editor_menu::StrategyInspection>,
+    pub strategy_editor_inspection: Option<crate::tui::menus::strategy_editor_menu::EditorInspection>,
     pub strategy_editor_new_name_editing: bool,
     pub strategy_editor_new_name_buf: String,
+    pub strategy_editor_clone_source: Option<crate::tui::menus::strategy_editor_menu::StrategyFileEntry>,
     pub strategy_editor_delete_confirm: bool,
 
     pub autotune_config: crate::autotune::AutotuneConfig,
@@ -728,6 +732,7 @@ impl AppState {
             strategy_editor_inspection: None,
             strategy_editor_new_name_editing: false,
             strategy_editor_new_name_buf: String::new(),
+            strategy_editor_clone_source: None,
             strategy_editor_delete_confirm: false,
 
             autotune_config: crate::autotune::AutotuneConfig::default(),
@@ -1004,30 +1009,42 @@ impl AppState {
         self.strategy_editor_inspection = self
             .strategy_editor_files
             .get(self.strategy_editor_index)
-            .and_then(|entry| {
-                crate::tui::menus::strategy_editor_menu::inspect_file(&entry.path, &self.engine.workspace_dir()).ok()
-            });
+            .and_then(|entry| crate::tui::menus::strategy_editor_menu::inspect_entry(entry, &self.engine).ok());
     }
 
     pub fn open_highlighted_strategy_file(&mut self) {
-        if let Some(entry) = self.strategy_editor_files.get(self.strategy_editor_index) {
-            self.should_open_editor = Some(entry.path.to_string_lossy().into_owned());
-        }
-    }
-
-    pub fn activate_selected_strategy_file(&mut self) {
         let Some(entry) = self.strategy_editor_files.get(self.strategy_editor_index).cloned() else {
             return;
         };
 
-        if entry.kind != crate::tui::menus::strategy_editor_menu::StrategyFileKind::Preset {
+        if !entry.read_only {
+            self.should_open_editor = Some(entry.path.to_string_lossy().into_owned());
+            return;
+        }
+
+        self.strategy_editor_clone_source = Some(entry);
+        self.strategy_editor_new_name_editing = true;
+        self.strategy_editor_new_name_buf.clear();
+        self.status_message = Some(rust_i18n::t!("msg_strat_editor_readonly_prompt").into_owned());
+    }
+
+    pub fn activate_selected_strategy_file(&mut self) {
+        use crate::tui::menus::strategy_editor_menu::StrategyFileKind;
+
+        let Some(entry) = self.strategy_editor_files.get(self.strategy_editor_index).cloned() else {
+            return;
+        };
+
+        let activatable_kind = matches!(
+            entry.kind,
+            StrategyFileKind::Preset | StrategyFileKind::Zapret1Strategy | StrategyFileKind::Profile
+        );
+        if !activatable_kind {
             self.status_message = Some(rust_i18n::t!("msg_strat_editor_not_preset").into_owned());
             return;
         }
 
-        let Ok(inspection) =
-            crate::tui::menus::strategy_editor_menu::inspect_file(&entry.path, &self.engine.workspace_dir())
-        else {
+        let Ok(inspection) = crate::tui::menus::strategy_editor_menu::inspect_entry(&entry, &self.engine) else {
             self.show_error(rust_i18n::t!("msg_strat_editor_inspect_failed").into_owned());
             return;
         };
@@ -1052,13 +1069,22 @@ impl AppState {
     }
 
     pub fn begin_new_strategy_file(&mut self) {
+        self.strategy_editor_clone_source = None;
         self.strategy_editor_new_name_editing = true;
         self.strategy_editor_new_name_buf.clear();
         self.status_message = None;
     }
 
+    pub fn cancel_new_strategy_file(&mut self) {
+        self.strategy_editor_new_name_editing = false;
+        self.strategy_editor_new_name_buf.clear();
+        self.strategy_editor_clone_source = None;
+        self.status_message = None;
+    }
+
     pub fn commit_new_strategy_file(&mut self) {
         let name = self.strategy_editor_new_name_buf.trim().to_string();
+        let clone_source = self.strategy_editor_clone_source.take();
         self.strategy_editor_new_name_editing = false;
         self.strategy_editor_new_name_buf.clear();
 
@@ -1066,7 +1092,12 @@ impl AppState {
             return;
         }
 
-        match crate::tui::menus::strategy_editor_menu::create_preset_file(&self.engine, &name) {
+        let result = match &clone_source {
+            Some(entry) => crate::tui::menus::strategy_editor_menu::duplicate_file_as(entry, &name),
+            None => crate::tui::menus::strategy_editor_menu::create_preset_file(&self.engine, &name),
+        };
+
+        match result {
             Ok(path) => {
                 self.refresh_strategy_editor_files();
                 if let Some(index) = self
@@ -1077,7 +1108,12 @@ impl AppState {
                     self.strategy_editor_index = index;
                 }
                 self.refresh_strategy_editor_inspection();
-                self.status_message = Some(rust_i18n::t!("msg_strat_editor_new_ok").into_owned());
+                if clone_source.is_some() {
+                    self.status_message = Some(rust_i18n::t!("msg_strat_editor_readonly_cloned").into_owned());
+                    self.should_open_editor = Some(path.to_string_lossy().into_owned());
+                } else {
+                    self.status_message = Some(rust_i18n::t!("msg_strat_editor_new_ok").into_owned());
+                }
             }
             Err(error) => self.show_error(error),
         }
@@ -1734,15 +1770,11 @@ impl AppState {
                     }
                 }
                 MainMenuState::StrategyEditor => {
-                    if !self.engine.uses_presets() {
-                        self.status_message = Some(rust_i18n::t!("msg_gf_preset_managed").into_owned());
-                    } else {
-                        self.refresh_strategy_editor_files();
-                        self.strategy_editor_index = 0;
-                        self.refresh_strategy_editor_inspection();
-                        self.active_screen = ActiveScreen::StrategyEditorSubmenu;
-                        self.status_message = None;
-                    }
+                    self.refresh_strategy_editor_files();
+                    self.strategy_editor_index = 0;
+                    self.refresh_strategy_editor_inspection();
+                    self.active_screen = ActiveScreen::StrategyEditorSubmenu;
+                    self.status_message = None;
                 }
                 MainMenuState::Autotune => {
                     self.active_screen = ActiveScreen::AutotuneSubmenu;
@@ -2927,5 +2959,13 @@ mod nav_tests {
         assert_eq!(MainMenuState::Strategy.next_visible(&z2), MainMenuState::BackendSettings);
         assert_eq!(MainMenuState::BackendSettings.prev_visible(&z1), MainMenuState::GamefilterSettings);
         assert_eq!(MainMenuState::BackendSettings.prev_visible(&z2), MainMenuState::Strategy);
+    }
+
+    #[test]
+    fn strategy_editor_is_visible_for_both_engines() {
+        let z1 = ZapretEngine::Zapret1;
+        let z2 = ZapretEngine::Zapret2;
+        assert!(MainMenuState::StrategyEditor.is_visible_for(&z1));
+        assert!(MainMenuState::StrategyEditor.is_visible_for(&z2));
     }
 }

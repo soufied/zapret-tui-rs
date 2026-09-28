@@ -81,6 +81,14 @@ impl ZapretEngine {
         matches!(self, Self::Zapret1)
     }
 
+    pub fn supports_ttl_autopick(&self) -> bool {
+        matches!(self, Self::Zapret1)
+    }
+
+    pub fn supports_active_fakes(&self) -> bool {
+        matches!(self, Self::Zapret1)
+    }
+
     pub fn service_name(&self) -> &'static str {
         match self {
             Self::Zapret1 => "zapret-rust",

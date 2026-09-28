@@ -479,7 +479,7 @@ pub fn run_zapret2_autotune(
 
         teardown(backend);
 
-        let launch = crate::runner::prepare(&ZapretEngine::Zapret2, preset, false, false, crate::config::load_ttl());
+        let launch = crate::runner::prepare(&ZapretEngine::Zapret2, preset, false, false, None);
         let (tcp_ports, udp_ports) = match &launch {
             Ok(l) => (l.tcp_ports.clone(), l.udp_ports.clone()),
             Err(_) => (String::new(), String::new()),

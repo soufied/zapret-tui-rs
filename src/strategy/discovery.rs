@@ -46,17 +46,18 @@ pub fn is_valid_preset_name(name: &str) -> bool {
 }
 
 pub fn zapret2_presets() -> Vec<String> {
-    let dir = ZapretEngine::Zapret2.presets_dir();
     let mut presets: Vec<String> = Vec::new();
 
-    if let Ok(entries) = fs::read_dir(&dir) {
-        for entry in entries.flatten() {
-            if !entry.path().is_file() {
-                continue;
-            }
-            if let Ok(name) = entry.file_name().into_string() {
-                if is_valid_preset_name(&name) {
-                    presets.push(name);
+    for dir in [ZapretEngine::Zapret2.presets_dir(), ZapretEngine::Zapret2.profiles_dir()] {
+        if let Ok(entries) = fs::read_dir(&dir) {
+            for entry in entries.flatten() {
+                if !entry.path().is_file() {
+                    continue;
+                }
+                if let Ok(name) = entry.file_name().into_string() {
+                    if is_valid_preset_name(&name) && !presets.contains(&name) {
+                        presets.push(name);
+                    }
                 }
             }
         }

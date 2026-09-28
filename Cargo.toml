@@ -25,6 +25,7 @@ aes-gcm = "0.10"
 hmac = "0.12"
 sha2 = "0.10"
 thiserror = "1.0"
+unicode-width = "0.1"
 
 [target.'cfg(target_os = "linux")'.dependencies]
 nix = { version = "0.27", features = ["signal"] }
