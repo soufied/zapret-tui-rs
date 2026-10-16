@@ -4,7 +4,7 @@ use std::time::Duration;
 
 use super::net_checks::{resolve_domain, try_tcp_connect_domain};
 use super::quic;
-use super::types::{status_char, AutotuneConfig, CheckStatus, DomainCheckResult};
+use super::types::{AutotuneConfig, CheckStatus, DomainCheckResult};
 
 fn null_device() -> &'static str {
     if cfg!(target_os = "windows") {
@@ -160,14 +160,10 @@ pub fn check_domain(config: &AutotuneConfig, domain: &str) -> DomainCheckResult 
         return super::runner::domain_check_error();
     }
     let alive = check_domain_alive(domain);
-    let detail;
 
     let (http, tls12, tls13, quic, http_count, quic_count) = if alive == CheckStatus::Pass {
-        let mut parts = Vec::new();
-
         let (http, hc) = if config.check_http {
             let (s, c) = check_domain_http(domain, config.num_requests);
-            parts.push(format!("HTTP:{} ({}/{})", status_char(&s), c, config.num_requests));
             (s, c)
         } else {
             (CheckStatus::Skip, 0)
@@ -180,14 +176,12 @@ pub fn check_domain(config: &AutotuneConfig, domain: &str) -> DomainCheckResult 
         };
 
         let tls12 = if config.check_tls12 {
-            parts.push(format!("TLS1.2:{}", status_char(&tls)));
             tls.clone()
         } else {
             CheckStatus::Skip
         };
 
         let tls13 = if config.check_tls13 {
-            parts.push(format!("TLS1.3:{}", status_char(&tls)));
             tls.clone()
         } else {
             CheckStatus::Skip
@@ -195,16 +189,13 @@ pub fn check_domain(config: &AutotuneConfig, domain: &str) -> DomainCheckResult 
 
         let (quic, qc) = if config.check_quic {
             let (s, c) = check_domain_quic(domain, config.num_requests);
-            parts.push(format!("QUIC:{} ({}/{})", status_char(&s), c, config.num_requests));
             (s, c)
         } else {
             (CheckStatus::Skip, 0)
         };
 
-        detail = parts.join(" ");
         (http, tls12, tls13, quic, hc, qc)
     } else if alive == CheckStatus::Skip {
-        detail = "Domain unreachable (skipped)".to_string();
         (
             CheckStatus::Skip,
             CheckStatus::Skip,
@@ -214,7 +205,6 @@ pub fn check_domain(config: &AutotuneConfig, domain: &str) -> DomainCheckResult 
             0,
         )
     } else {
-        detail = "Domain appears blocked (alive check failed)".to_string();
         (
             CheckStatus::Skip,
             CheckStatus::Skip,
@@ -239,7 +229,6 @@ pub fn check_domain(config: &AutotuneConfig, domain: &str) -> DomainCheckResult 
         tls13,
         quic,
         baseline_pass,
-        detail,
         http_count,
         quic_count,
     }

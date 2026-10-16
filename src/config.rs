@@ -179,20 +179,26 @@ pub fn load_config(file: &str) -> Result<RunConfig, String> {
 }
 
 pub fn get_interfaces() -> Vec<String> {
-    #[allow(unused_mut)]
     let mut interfaces = vec!["any".to_string()];
-
-    #[cfg(target_os = "linux")]
-    if let Ok(entries) = fs::read_dir("/sys/class/net") {
-        for entry in entries.flatten() {
-            if let Ok(name) = entry.file_name().into_string() {
-                interfaces.push(name);
-            }
-        }
-    }
-
-    let _ = env::consts::OS;
+    interfaces.extend(system_interfaces());
     interfaces
+}
+
+#[cfg(target_os = "linux")]
+fn system_interfaces() -> Vec<String> {
+    fs::read_dir("/sys/class/net")
+        .map(|entries| {
+            entries
+                .flatten()
+                .filter_map(|entry| entry.file_name().into_string().ok())
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+#[cfg(not(target_os = "linux"))]
+fn system_interfaces() -> Vec<String> {
+    Vec::new()
 }
 
 pub fn get_app_dir() -> std::path::PathBuf {

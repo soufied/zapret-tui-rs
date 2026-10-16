@@ -1,8 +1,3 @@
-//! procd service manager for OpenWrt.
-//!
-//! Writes an `/etc/init.d` script that uses `/etc/rc.common` and `USE_PROCD`.
-//! procd supervises the process and sends SIGTERM on stop, which the binary
-//! handles by removing its firewall rules before exiting.
 
 use crate::inits::ServiceManager;
 use std::fs;
@@ -28,7 +23,6 @@ impl ProcdManager {
         format!("/etc/rc.d/S{}{}", START_PRIORITY, self.name)
     }
 
-    /// Reads the `PROG="..."` assignment back out of the generated script.
     fn program_path(&self) -> Option<String> {
         let content = fs::read_to_string(self.script_path()).ok()?;
         content

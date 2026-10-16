@@ -45,13 +45,6 @@ pub fn resolve_domain(domain: &str) -> Vec<IpAddr> {
     }
 }
 
-#[allow(dead_code)]
-pub fn clear_dns_cache() {
-    if let Ok(mut guard) = DNS_CACHE.lock() {
-        *guard = None;
-    }
-}
-
 fn is_sinkhole(ip: IpAddr) -> bool {
     match ip {
         IpAddr::V4(v4) => v4.is_unspecified() || v4.is_loopback() || v4.is_private(),
@@ -79,55 +72,43 @@ pub fn try_tcp_connect_domain(domain: &str, port: u16) -> Result<TcpStream, io::
 }
 
 pub fn check_dns_spoof() -> CheckResult {
-    let mut results: Vec<String> = Vec::new();
+    let mut problems = 0;
 
     for &domain in TEST_DOMAINS {
         let sys_ips = resolve_domain(domain);
         if sys_ips.is_empty() {
-            results.push(format!("{}: not resolved", domain));
+            problems += 1;
             continue;
         }
 
         let suspect: Vec<IpAddr> = sys_ips.iter().copied().filter(|&ip| is_sinkhole(ip)).collect();
         if !suspect.is_empty() {
-            return CheckResult::fail(format!("{} resolved to sinkhole IPs: {:?}", domain, suspect));
+            return CheckResult::fail();
         }
 
         if let Some(&(_, known_ips)) = KNOWN_IPS.iter().find(|(d, _)| *d == domain) {
             let known_addrs: Vec<IpAddr> = known_ips.iter().filter_map(|s| s.parse().ok()).collect();
             let any_match = sys_ips.iter().any(|ip| known_addrs.contains(ip));
             if !any_match {
-                results.push(format!(
-                    "{} resolved to {:?} (unexpected vs known {:?})",
-                    domain, sys_ips, known_ips
-                ));
-            } else {
-                results.push(format!("{} OK", domain));
+                problems += 1;
             }
         }
     }
 
-    let clean_ips = resolve_domain(CLEAN_DOMAIN);
-    if clean_ips.is_empty() {
-        return CheckResult::skip("google.com: not resolved (possible Internet issue)");
+    if resolve_domain(CLEAN_DOMAIN).is_empty() {
+        return CheckResult::skip();
     }
 
-    if results.is_empty() || results.iter().all(|r| r.contains("OK")) {
-        CheckResult::pass("DNS responses look legitimate")
+    if problems == 0 {
+        CheckResult::pass()
     } else {
-        let fails: Vec<&str> = results
-            .iter()
-            .filter(|r| !r.contains("OK"))
-            .map(|s| s.as_str())
-            .collect();
-        CheckResult::fail(format!("Possible DNS spoofing: {}", fails.join("; ")))
+        CheckResult::fail()
     }
 }
 
 pub fn check_tcp_rst() -> CheckResult {
     let mut domain_success = 0;
     let mut domain_fail_rst = 0;
-    let mut details: Vec<String> = Vec::new();
 
     for &domain in TEST_DOMAINS {
         match try_tcp_connect_domain(domain, 443) {
@@ -135,52 +116,30 @@ pub fn check_tcp_rst() -> CheckResult {
                 let _ = stream.set_read_timeout(Some(Duration::from_secs(2)));
                 let mut buf = [0u8; 1];
                 match stream.read_exact(&mut buf) {
-                    Ok(_) => {
-                        domain_success += 1;
-                        details.push(format!("{}: connected", domain));
-                    }
-                    Err(ref e) if e.kind() == ErrorKind::ConnectionReset => {
-                        domain_fail_rst += 1;
-                        details.push(format!("{}: RST after connect", domain));
-                    }
+                    Ok(_) => domain_success += 1,
+                    Err(ref e) if e.kind() == ErrorKind::ConnectionReset => domain_fail_rst += 1,
                     Err(ref e) if e.kind() == ErrorKind::WouldBlock || e.kind() == ErrorKind::TimedOut => {
-                        domain_success += 1;
-                        details.push(format!("{}: connected (idle)", domain));
+                        domain_success += 1
                     }
-                    Err(e) => {
-                        details.push(format!("{}: {} after connect", domain, e));
-                    }
+                    Err(_) => {}
                 }
             }
-            Err(ref e) if e.kind() == ErrorKind::ConnectionReset => {
-                domain_fail_rst += 1;
-                details.push(format!("{}: RST on connect", domain));
-            }
-            Err(ref e) if e.kind() == ErrorKind::TimedOut => {
-                domain_fail_rst += 1;
-                details.push(format!("{}: timeout (possible DPI drop)", domain));
-            }
-            Err(e) => {
-                details.push(format!("{}: {}", domain, e));
-            }
+            Err(ref e) if e.kind() == ErrorKind::ConnectionReset => domain_fail_rst += 1,
+            Err(ref e) if e.kind() == ErrorKind::TimedOut => domain_fail_rst += 1,
+            Err(_) => {}
         }
     }
 
     if try_tcp_connect_domain(CLEAN_DOMAIN, 443).is_err() {
-        return CheckResult::skip("Internet connectivity issue (google.com unreachable)");
+        return CheckResult::skip();
     }
 
     if domain_success > 0 && domain_fail_rst == 0 {
-        CheckResult::pass("TCP connections successful, no RST detected")
+        CheckResult::pass()
     } else if domain_fail_rst > 0 {
-        CheckResult::fail(format!(
-            "TCP RST/blocking detected ({}/{} domains affected): {}",
-            domain_fail_rst,
-            TEST_DOMAINS.len(),
-            details.join("; ")
-        ))
+        CheckResult::fail()
     } else {
-        CheckResult::skip(format!("Mixed results: {}", details.join("; ")))
+        CheckResult::skip()
     }
 }
 
@@ -188,7 +147,6 @@ pub fn check_sni_block() -> CheckResult {
     let mut ip_ok = 0;
     let mut domain_fail = 0;
     let mut ip_fail = 0;
-    let mut details: Vec<String> = Vec::new();
 
     for &(domain, ips) in KNOWN_IPS {
         if domain == CLEAN_DOMAIN {
@@ -206,53 +164,31 @@ pub fn check_sni_block() -> CheckResult {
                     let _ = stream.set_read_timeout(Some(Duration::from_secs(1)));
                     let mut buf = [0u8; 1];
                     match stream.read(&mut buf) {
-                        Ok(_) => {
-                            if !domain_ok {
-                                details.push(format!("{} (IP {}) works, domain fails -> SNI block", domain, ip));
-                            }
-                            ip_ok += 1;
-                        }
+                        Ok(_) => ip_ok += 1,
                         Err(ref e) if e.kind() == ErrorKind::WouldBlock || e.kind() == ErrorKind::TimedOut => {
-                            if !domain_ok {
-                                details.push(format!("{} (IP {}) works, domain fails -> SNI block", domain, ip));
-                            }
-                            ip_ok += 1;
+                            ip_ok += 1
                         }
-                        Err(ref e) if e.kind() == ErrorKind::ConnectionReset => {
-                            details.push(format!("{} (IP {}): RST", domain, ip));
-                            ip_fail += 1;
-                        }
-                        Err(_) => {
-                            ip_ok += 1;
-                        }
+                        Err(ref e) if e.kind() == ErrorKind::ConnectionReset => ip_fail += 1,
+                        Err(_) => ip_ok += 1,
                     }
                 }
-                Err(ref e) if e.kind() == ErrorKind::ConnectionReset => {
-                    details.push(format!("{} (IP {}): RST on connect", domain, ip));
-                    ip_fail += 1;
-                }
-                Err(ref e) if e.kind() == ErrorKind::TimedOut => {
-                    details.push(format!("{} (IP {}): timeout", domain, ip));
-                    ip_fail += 1;
-                }
+                Err(ref e) if e.kind() == ErrorKind::ConnectionReset => ip_fail += 1,
+                Err(ref e) if e.kind() == ErrorKind::TimedOut => ip_fail += 1,
                 Err(_) => {}
             }
         }
     }
 
     if try_tcp_connect_domain(CLEAN_DOMAIN, 443).is_err() {
-        return CheckResult::skip("Internet connectivity issue");
+        return CheckResult::skip();
     }
 
     if domain_fail > 0 && ip_ok > ip_fail {
-        CheckResult::fail(format!(
-            "SNI blocking detected (domains fail but IPs work): {}",
-            details.join("; ")
-        ))
+        CheckResult::fail()
     } else if domain_fail == 0 {
-        CheckResult::pass("No SNI blocking detected")
+        CheckResult::pass()
     } else {
-        CheckResult::skip(format!("Inconclusive: {}", details.join("; ")))
+        CheckResult::skip()
     }
 }
 
@@ -262,10 +198,8 @@ pub fn check_siberian_block() -> CheckResult {
 
     let test_ips: Vec<&str> = KNOWN_IPS[0].1.to_vec();
 
-    let clean_ok = try_tcp_connect_domain(CLEAN_DOMAIN, 443).is_ok();
-
-    if !clean_ok {
-        return CheckResult::skip("Internet connectivity issue");
+    if try_tcp_connect_domain(CLEAN_DOMAIN, 443).is_err() {
+        return CheckResult::skip();
     }
 
     let mut handles: Vec<std::thread::JoinHandle<Result<TcpStream, io::Error>>> = Vec::new();
@@ -308,22 +242,11 @@ pub fn check_siberian_block() -> CheckResult {
     };
 
     if extra_failed == 0 && pass_ratio > 0.95 {
-        CheckResult::pass("No Siberian block detected (100% success after 15+ concurrent)")
-    } else if extra_failed > 0 {
-        CheckResult::fail(format!(
-            "Possible Siberian block: {} of {} extra connections failed",
-            extra_failed, EXTRA_CONNECTIONS
-        ))
-    } else if pass_ratio < 0.8 {
-        CheckResult::fail(format!(
-            "High failure rate: {}/{} connections failed",
-            failed, total_attempted
-        ))
+        CheckResult::pass()
+    } else if extra_failed > 0 || pass_ratio < 0.8 {
+        CheckResult::fail()
     } else {
-        CheckResult::skip(format!(
-            "Mixed results: {}/{} alive, {}/{} extra failed",
-            alive, total_attempted, extra_failed, EXTRA_CONNECTIONS
-        ))
+        CheckResult::skip()
     }
 }
 
@@ -332,15 +255,14 @@ pub fn check_quic_block() -> CheckResult {
         Ok(sock) => {
             let clean_ip: IpAddr = "8.8.8.8".parse().unwrap();
             if sock.connect((clean_ip, 53)).is_err() {
-                return CheckResult::skip("Internet connectivity issue (cannot reach 8.8.8.8:53 UDP)");
+                return CheckResult::skip();
             }
         }
         Err(_) => {
-            return CheckResult::skip("Cannot create UDP socket");
+            return CheckResult::skip();
         }
     }
 
-    let mut details: Vec<String> = Vec::new();
     let mut quic_ok = 0;
 
     for &(domain, ips) in KNOWN_IPS {
@@ -353,100 +275,50 @@ pub fn check_quic_block() -> CheckResult {
                 Err(_) => continue,
             };
             let addr = SocketAddr::new(ip, 443);
-            match UdpSocket::bind("0.0.0.0:0") {
-                Ok(sock) => {
-                    if sock.connect(addr).is_err() {
-                        details.push(format!("{}: UDP connect failed", ip_str));
-                        continue;
-                    }
-                    if sock.set_read_timeout(Some(Duration::from_secs(2))).is_err() {
-                        continue;
-                    }
-                    match quic::send_probe(&sock, domain) {
-                        quic::ProbeOutcome::Reply => {
-                            details.push(format!("{}: QUIC response", ip_str));
-                            quic_ok += 1;
-                        }
-                        quic::ProbeOutcome::NoReply => {
-                            details.push(format!("{}: QUIC sent, no response (possible QUIC block)", ip_str));
-                        }
-                        quic::ProbeOutcome::Error => {
-                            details.push(format!("{}: QUIC probe error", ip_str));
-                        }
-                    }
-                }
-                Err(e) => {
-                    details.push(format!("{}: socket bind error: {}", ip_str, e));
-                }
+            let Ok(sock) = UdpSocket::bind("0.0.0.0:0") else {
+                continue;
+            };
+            if sock.connect(addr).is_err() {
+                continue;
+            }
+            if sock.set_read_timeout(Some(Duration::from_secs(2))).is_err() {
+                continue;
+            }
+            match quic::send_probe(&sock, domain) {
+                quic::ProbeOutcome::Reply => quic_ok += 1,
+                quic::ProbeOutcome::NoReply | quic::ProbeOutcome::Error => {}
             }
         }
     }
 
     if quic_ok > 0 {
-        CheckResult::pass("QUIC/UDP traffic appears unblocked")
+        CheckResult::pass()
     } else {
-        let fail_details: Vec<&str> = details
-            .iter()
-            .filter(|d| d.contains("no response") || d.contains("error"))
-            .map(|s| s.as_str())
-            .collect();
-        CheckResult::fail(format!("QUIC/UDP likely blocked: {}", fail_details.join("; ")))
+        CheckResult::fail()
     }
 }
 
 pub fn check_cidr_whitelist() -> CheckResult {
-    let test_ips = [
-        ("1.1.1.1", "Cloudflare DNS"),
-        ("8.8.8.8", "Google DNS"),
-        ("77.88.8.8", "Yandex DNS"),
-        ("185.178.208.97", "discord CDN (MCF)"),
-        ("104.16.0.0", "Cloudflare edge"),
-    ];
+    let test_ips = ["1.1.1.1", "8.8.8.8", "77.88.8.8", "185.178.208.97", "104.16.0.0"];
 
-    let mut reachable = 0;
     let mut blocked = 0;
-    let mut details: Vec<String> = Vec::new();
 
-    for &(ip, label) in &test_ips {
+    for ip in test_ips {
         match try_tcp_connect(ip, 443) {
-            Ok(_) => {
-                reachable += 1;
-                details.push(format!("{} ({}) reachable", ip, label));
-            }
-            Err(ref e) if e.kind() == ErrorKind::ConnectionReset => {
-                blocked += 1;
-                details.push(format!("{} ({}) RST", ip, label));
-            }
-            Err(ref e) if e.kind() == ErrorKind::TimedOut => {
-                blocked += 1;
-                details.push(format!("{} ({}) timeout", ip, label));
-            }
-            Err(e) => {
-                details.push(format!("{} ({}): {}", ip, label, e));
-            }
+            Ok(_) => {}
+            Err(ref e) if e.kind() == ErrorKind::ConnectionReset || e.kind() == ErrorKind::TimedOut => blocked += 1,
+            Err(_) => {}
         }
     }
 
     if try_tcp_connect_domain(CLEAN_DOMAIN, 443).is_err() {
-        return CheckResult::skip("Internet connectivity issue");
+        return CheckResult::skip();
     }
 
     if blocked == 0 {
-        CheckResult::pass("No CIDR-based blocking detected across tested subnets")
-    } else if reachable > 0 && blocked > 0 {
-        let fail_parts: Vec<&str> = details
-            .iter()
-            .filter(|d| d.contains("RST") || d.contains("timeout"))
-            .map(|s| s.as_str())
-            .collect();
-        CheckResult::fail(format!(
-            "Possible selective CIDR blocking ({}/{} blocked): {}",
-            blocked,
-            test_ips.len(),
-            fail_parts.join("; ")
-        ))
+        CheckResult::pass()
     } else {
-        CheckResult::fail("All tested IPs blocked: possible whitelist-only policy".to_string())
+        CheckResult::fail()
     }
 }
 
@@ -467,10 +339,10 @@ pub fn run_network_checks(block_checks: &BlockChecks) -> Vec<CheckResult> {
     }
     let mut results: Vec<Option<CheckResult>> = vec![None; checks.len()];
     for (i, handle) in handles {
-        results[i] = Some(handle.join().unwrap_or_else(|_| CheckResult::skip("Thread panic")));
+        results[i] = Some(handle.join().unwrap_or_else(|_| CheckResult::skip()));
     }
     results
         .into_iter()
-        .map(|r| r.unwrap_or_else(|| CheckResult::skip("Not selected")))
+        .map(|r| r.unwrap_or_else(|| CheckResult::skip()))
         .collect()
 }

@@ -45,28 +45,17 @@ pub enum CheckStatus {
 #[derive(Debug, Clone)]
 pub struct CheckResult {
     pub status: CheckStatus,
-    #[allow(dead_code)]
-    pub detail: String,
 }
 
 impl CheckResult {
-    pub fn pass(detail: impl Into<String>) -> Self {
-        Self {
-            status: CheckStatus::Pass,
-            detail: detail.into(),
-        }
+    pub fn pass() -> Self {
+        Self { status: CheckStatus::Pass }
     }
-    pub fn fail(detail: impl Into<String>) -> Self {
-        Self {
-            status: CheckStatus::Fail,
-            detail: detail.into(),
-        }
+    pub fn fail() -> Self {
+        Self { status: CheckStatus::Fail }
     }
-    pub fn skip(detail: impl Into<String>) -> Self {
-        Self {
-            status: CheckStatus::Skip,
-            detail: detail.into(),
-        }
+    pub fn skip() -> Self {
+        Self { status: CheckStatus::Skip }
     }
 }
 
@@ -165,8 +154,6 @@ pub struct DomainCheckResult {
     pub tls13: CheckStatus,
     pub quic: CheckStatus,
     pub baseline_pass: bool,
-    #[allow(dead_code)]
-    pub detail: String,
     pub http_count: usize,
     pub quic_count: usize,
 }
@@ -224,28 +211,6 @@ pub struct AutotuneResults {
     pub elapsed_secs: u64,
 }
 
-#[allow(dead_code)]
-impl AutotuneResults {
-    pub fn dns_spoof(&self) -> &CheckResult {
-        &self.block_results[0]
-    }
-    pub fn tcp_rst(&self) -> &CheckResult {
-        &self.block_results[1]
-    }
-    pub fn sni_block(&self) -> &CheckResult {
-        &self.block_results[2]
-    }
-    pub fn siberian_block(&self) -> &CheckResult {
-        &self.block_results[3]
-    }
-    pub fn quic_block(&self) -> &CheckResult {
-        &self.block_results[4]
-    }
-    pub fn cidr_whitelist(&self) -> &CheckResult {
-        &self.block_results[5]
-    }
-}
-
 pub fn status_str_file(s: &CheckStatus) -> &'static str {
     match s {
         CheckStatus::Pass => "OK",
@@ -255,11 +220,3 @@ pub fn status_str_file(s: &CheckStatus) -> &'static str {
     }
 }
 
-pub fn status_char(s: &CheckStatus) -> &'static str {
-    match s {
-        CheckStatus::Pass => "OK",
-        CheckStatus::Fail => "BLOCKED",
-        CheckStatus::Skip => "-",
-        CheckStatus::Error => "ERR",
-    }
-}

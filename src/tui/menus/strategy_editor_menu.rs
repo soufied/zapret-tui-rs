@@ -155,36 +155,6 @@ pub fn create_preset_file(engine: &ZapretEngine, name: &str) -> Result<PathBuf, 
     Ok(path)
 }
 
-pub fn normalize_zapret1_name(raw: &str) -> String {
-    let trimmed = raw.trim();
-    if trimmed.to_lowercase().ends_with(".bat") {
-        trimmed.to_string()
-    } else {
-        format!("{}.bat", trimmed)
-    }
-}
-
-const ZAPRET1_NEW_STRATEGY_TEMPLATE: &str = "@echo off\r\nchcp 65001 > nul\r\n\r\ncd /d \"%~dp0\"\r\n\r\nset \"BIN=%~dp0bin\\\"\r\nset \"LISTS=%~dp0lists\\\"\r\ncd /d %BIN%\r\n\r\nstart \"zapret: %~n0\" /min \"%BIN%winws.exe\" --wf-tcp=80,443 --wf-udp=443 ^\r\n--filter-tcp=80,443 --hostlist=\"%LISTS%list-general.txt\" --dpi-desync=fake --dpi-desync-repeats=6 --dpi-desync-fake-tls=\"%BIN%tls_clienthello_www_google_com.bin\"\r\n";
-
-pub fn create_zapret1_strategy_file(name: &str) -> Result<PathBuf, String> {
-    let normalized = normalize_zapret1_name(name);
-    if !is_valid_zapret1_name(&normalized) {
-        return Err(format!("{}: invalid strategy name", normalized));
-    }
-
-    let ws_dir = crate::strategy::repo_dir();
-    let dir = ws_dir.join(ZAPRET1_CUSTOM_SUBDIR);
-    std::fs::create_dir_all(&dir).map_err(|error| format!("{}: {}", dir.display(), error))?;
-
-    let path = dir.join(&normalized);
-    if path.exists() {
-        return Err(format!("{}: already exists", normalized));
-    }
-
-    std::fs::write(&path, ZAPRET1_NEW_STRATEGY_TEMPLATE).map_err(|error| format!("{}: {}", path.display(), error))?;
-    Ok(path)
-}
-
 fn unique_candidate_path(dir: &Path, stem: &str, extension: &str) -> PathBuf {
     let mut candidate_name = format!("{}_copy.{}", stem, extension);
     let mut candidate_path = dir.join(&candidate_name);

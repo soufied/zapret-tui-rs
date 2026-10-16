@@ -577,8 +577,6 @@ pub enum EditorSession {
 #[derive(Debug, Clone)]
 pub struct EditorLaunch {
     pub session: EditorSession,
-    pub kind: EditorKind,
-    pub command: String,
 }
 
 fn launch_editor(command: &str, args: &[String], file_path: &str) -> Result<EditorSession, String> {
@@ -619,14 +617,9 @@ pub fn open_editor_detailed(file_path: &str) -> std::io::Result<EditorLaunch> {
             "Launching editor '{}' resolved from {:?}",
             editor.command, editor.source
         ));
-        let kind = classify_editor(&editor.command);
         match launch_editor(&editor.command, &editor.args, file_path) {
             Ok(session) => {
-                return Ok(EditorLaunch {
-                    session,
-                    kind,
-                    command: editor.command,
-                })
+                return Ok(EditorLaunch { session })
             }
             Err(reason) => {
                 crate::logger::log_error(&format!("editor '{}' failed to launch: {}", editor.command, reason));
@@ -652,11 +645,7 @@ pub fn open_editor_detailed(file_path: &str) -> std::io::Result<EditorLaunch> {
 
         match launch_editor(candidate.command, &args, file_path) {
             Ok(session) => {
-                return Ok(EditorLaunch {
-                    session,
-                    kind: classify_editor(candidate.command),
-                    command: candidate.command.to_string(),
-                })
+                return Ok(EditorLaunch { session })
             }
             Err(reason) => {
                 crate::logger::log_error(&format!("editor '{}' failed to launch: {}", candidate.command, reason));
@@ -674,10 +663,6 @@ pub fn open_editor_detailed(file_path: &str) -> std::io::Result<EditorLaunch> {
 
     crate::logger::log_error(&detail);
     Err(std::io::Error::new(std::io::ErrorKind::NotFound, detail))
-}
-
-pub fn open_editor(file_path: &str) -> std::io::Result<EditorSession> {
-    open_editor_detailed(file_path).map(|launch| launch.session)
 }
 
 pub fn read_log_tail(path: &Path, max_lines: usize) -> Vec<String> {

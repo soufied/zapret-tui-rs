@@ -82,7 +82,6 @@ pub fn domain_check_error() -> DomainCheckResult {
         tls13: CheckStatus::Error,
         quic: CheckStatus::Error,
         baseline_pass: false,
-        detail: "check thread panicked".to_string(),
         http_count: 0,
         quic_count: 0,
     }

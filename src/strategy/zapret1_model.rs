@@ -1,6 +1,4 @@
 use crate::strategy::parser::{tokenize_preset, GameFilterPorts};
-use std::fs;
-use std::path::Path;
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct FilterSpec {
@@ -38,29 +36,6 @@ pub struct DesyncSpec {
     pub fake_payloads: Vec<FakePayload>,
 }
 
-impl DesyncSpec {
-    pub fn is_empty(&self) -> bool {
-        self.methods.is_empty()
-            && self.fooling.is_empty()
-            && self.cutoff.is_none()
-            && self.repeats.is_none()
-            && !self.any_protocol
-            && self.start.is_none()
-            && self.autottl.is_none()
-            && self.ttl.is_none()
-            && self.ttl6.is_none()
-            && self.split_pos.is_empty()
-            && self.split_seqovl.is_none()
-            && self.split_seqovl_pattern.is_none()
-            && self.fakedsplit_pattern.is_none()
-            && self.badseq_increment.is_none()
-            && self.badack_increment.is_none()
-            && self.fake_tls_mod.is_empty()
-            && self.hostfakesplit_mod.is_empty()
-            && self.fake_payloads.is_empty()
-    }
-}
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TargetListKind {
     Hostlist,
@@ -87,13 +62,6 @@ impl TargetListKind {
             Self::IpsetIp => "ipset-ip",
             Self::IpsetExcludeIp => "ipset-exclude-ip",
         }
-    }
-
-    pub fn is_file_ref(&self) -> bool {
-        matches!(
-            self,
-            Self::Hostlist | Self::HostlistExclude | Self::HostlistAuto | Self::Ipset | Self::IpsetExclude
-        )
     }
 }
 
@@ -425,11 +393,6 @@ pub fn parse_zapret1_content(content: &str, game_filter: Option<&GameFilterPorts
         uses_game_filter_tcp,
         uses_game_filter_udp,
     }
-}
-
-pub fn parse_zapret1_file(path: &Path, game_filter: Option<&GameFilterPorts>) -> Result<Zapret1Strategy, String> {
-    let content = fs::read_to_string(path).map_err(|error| format!("{}: {}", path.display(), error))?;
-    Ok(parse_zapret1_content(&content, game_filter))
 }
 
 fn quote_if_needed(value: &str) -> String {

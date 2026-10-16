@@ -1,24 +1,14 @@
-//! Router mode: headless operation on OpenWrt and similar routers.
-//!
-//! In router mode the TUI is skipped, settings come from a config file
-//! (by default in `DEFAULT_CACHE_DIR`), and the process is expected to run
-//! under procd via the init script installed by `inits::procd`.
 
 use crate::utils::find_in_path;
 use std::fs;
 use std::path::Path;
 
-/// Cache and config directory used in router mode unless `-d` or
-/// `ZAPRET_CACHE_DIR` override it. Lives on persistent storage so that
-/// downloads survive reboots.
 pub const DEFAULT_CACHE_DIR: &str = "/usr/share/zapret-rust";
 
 const OPENWRT_RELEASE: &str = "/etc/openwrt_release";
 const OS_RELEASE: &str = "/etc/os-release";
 const FIREWALL_CONFIG: &str = "/etc/config/firewall";
 
-/// Package manager available on the router. OpenWrt 25.x and newer use `apk`;
-/// 24.10 and older use `opkg`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PackageManager {
     Apk,
@@ -26,8 +16,6 @@ pub enum PackageManager {
     Unknown,
 }
 
-/// True when running on OpenWrt. Checks the release file first, then falls
-/// back to `os-release` for images that omit `openwrt_release`.
 pub fn is_openwrt() -> bool {
     if Path::new(OPENWRT_RELEASE).exists() {
         return true;
@@ -37,8 +25,6 @@ pub fn is_openwrt() -> bool {
         .unwrap_or(false)
 }
 
-/// Detects the package manager. `apk` is checked first because 25.x images
-/// have no `opkg`.
 pub fn package_manager() -> PackageManager {
     if find_in_path("apk").is_some() {
         PackageManager::Apk
@@ -49,8 +35,6 @@ pub fn package_manager() -> PackageManager {
     }
 }
 
-/// Shell command that installs `packages` with the router's package manager,
-/// or `None` when no supported package manager is found.
 pub fn install_command(packages: &str) -> Option<String> {
     match package_manager() {
         PackageManager::Apk => Some(format!("apk add {}", packages)),
@@ -59,7 +43,6 @@ pub fn install_command(packages: &str) -> Option<String> {
     }
 }
 
-/// OpenWrt package that provides a given command.
 fn package_for_tool(tool: &str) -> &str {
     match tool {
         "pgrep" => "procps-ng-pgrep",
@@ -67,8 +50,6 @@ fn package_for_tool(tool: &str) -> &str {
     }
 }
 
-/// True when OpenWrt's firewall enables flow offloading. Offloaded flows skip
-/// the netfilter hooks zapret relies on, so DPI desync may never see them.
 pub fn flow_offloading_enabled() -> bool {
     let Ok(content) = fs::read_to_string(FIREWALL_CONFIG) else {
         return false;
@@ -79,8 +60,6 @@ pub fn flow_offloading_enabled() -> bool {
     })
 }
 
-/// Collects warnings about the environment that would make router mode fail
-/// or silently do nothing. Never blocks startup on its own.
 pub fn preflight_warnings() -> Vec<String> {
     let mut warnings = Vec::new();
 

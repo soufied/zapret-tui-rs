@@ -12,15 +12,14 @@
 }:
 
 let
-  # Tools zapret-rust runs as external commands.
   runtimeDeps = [
-    nftables   # nft: default firewall backend
-    iptables   # iptables: alternative backend
-    curl       # connectivity probes and downloads
-    libcap     # setcap
-    procps     # pgrep / pkill
-    polkit     # pkexec for unprivileged launches
-    coreutils  # id and friends
+    nftables
+    iptables
+    curl
+    libcap
+    procps
+    polkit
+    coreutils
   ];
 in
 rustPlatform.buildRustPackage {
@@ -29,12 +28,10 @@ rustPlatform.buildRustPackage {
 
   inherit src;
 
-  # Requires Cargo.lock to be committed to the repository (see README).
   cargoLock.lockFile = "${src}/Cargo.lock";
 
   nativeBuildInputs = [ makeWrapper ];
 
-  # Tests may need root or network access, so they are not run in the sandbox.
   doCheck = false;
 
   postInstall = ''

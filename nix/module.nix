@@ -1,7 +1,3 @@
-# NixOS module for zapret-rust.
-#
-# The package is set by the flake (see flake.nix). Without the flake, set
-# services.zapret-rust.package yourself.
 { config, lib, pkgs, ... }:
 
 let
@@ -9,7 +5,6 @@ let
 
   boolStr = b: if b then "true" else "false";
 
-  # Same keys the app reads and writes in conf.env.
   configFile = pkgs.writeText "zapret-rust-conf.env" ''
     engine=${cfg.engine}
     interface=${cfg.interface}
@@ -114,7 +109,6 @@ in
       restartTriggers = [ configFile ];
 
       serviceConfig = {
-        # The app runs in the foreground and removes its firewall rules on SIGTERM.
         ExecStart = "${cfg.package}/bin/zapret-rust --config /etc/zapret-rust/conf.env --cache-dir ${cfg.cacheDir}";
         Restart = "on-failure";
         RestartSec = 5;

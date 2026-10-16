@@ -1,9 +1,3 @@
-# Maintainer: <your name> <your email>
-#
-# Builds zapret-rust from the tagged source release.
-# Local build:  cd packaging/arch && makepkg -si
-# AUR:          copy this file and .SRCINFO to the AUR repository.
-
 pkgname=zapret-rust
 pkgver=2.3.0
 pkgrel=1
@@ -13,10 +7,10 @@ url="https://github.com/soufied/zapret-tui-rs"
 license=('MIT')
 depends=(
   'curl'
-  'libcap'        # setcap
-  'nftables'      # default firewall backend
-  'polkit'        # privilege escalation (pkexec)
-  'procps-ng'     # pgrep / pkill
+  'libcap'
+  'nftables'
+  'polkit'
+  'procps-ng'
 )
 optdepends=(
   'iptables: alternative firewall backend'
@@ -27,13 +21,11 @@ options=('!debug')
 
 _gh=zapret-tui-rs
 source=("$_gh-$pkgver.tar.gz::$url/archive/refs/tags/v$pkgver.tar.gz")
-sha256sums=('SKIP')   # replace with the real checksum: updpkgsums
+sha256sums=('SKIP')
 
 prepare() {
   cd "$srcdir/$_gh-$pkgver"
 
-  # Use the lockfile from the release when present; otherwise generate one
-  # so the build is still possible. Committing Cargo.lock upstream is preferred.
   if [[ ! -f Cargo.lock ]]; then
     cargo generate-lockfile
   fi
@@ -52,6 +44,4 @@ package() {
   install -Dm755 target/release/zapret-rust "$pkgdir/usr/bin/zapret-rust"
   install -Dm644 README.md "$pkgdir/usr/share/doc/$pkgname/README.md"
 
-  # TODO: install the MIT license file once the repository ships one:
-  # install -Dm644 LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
 }

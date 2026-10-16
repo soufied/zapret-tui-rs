@@ -19,7 +19,6 @@ fn is_emoji_presentation_codepoint(ch: char) -> bool {
             | 0x2300..=0x23FF
             | 0x25A0..=0x25FF
             | 0x2B00..=0x2BFF
-            | 0x2700..=0x27BF
     )
 }
 
