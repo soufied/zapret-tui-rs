@@ -527,3 +527,10 @@ autotune_matrix_all_ok: "✅ Все проверенные сервисы дос
 autotune_matrix_blocked: "❌ Обнаружены заблокированные или деградировавшие сервисы."
 autotune_matrix_current: "текущий"
 autotune_matrix_legend: "OK = обе проверки пройдены, PARTIAL = одна, BLOCKED = обе провалены, SKIP = отменено"
+
+cli_opt_router: "   -R, --router            Режим роутера (OpenWrt) без TUI"
+router_err_no_strategy: "Для режима роутера нужна стратегия. Укажите strategy= в конфиге или передайте -s."
+router_warn_no_firewall: "ПРЕДУПРЕЖДЕНИЕ: не найдены nft и iptables. Установите nftables или iptables перед запуском."
+router_warn_missing_tool: "ПРЕДУПРЕЖДЕНИЕ: %{tool} не найден в PATH."
+router_warn_flow_offloading: "ПРЕДУПРЕЖДЕНИЕ: в /etc/config/firewall включён flow offloading, он может обходить zapret для установленных соединений. Отключить: uci set firewall.@defaults[0].flow_offloading='0'; uci set firewall.@defaults[0].flow_offloading_hw='0'; uci commit firewall; /etc/init.d/firewall restart"
+router_hint_install: "Установите: %{command}"

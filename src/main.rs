@@ -5,6 +5,7 @@ mod fakes;
 mod firewalls;
 pub mod inits;
 mod platform;
+mod router;
 
 mod ingest;
 mod ipset;
@@ -71,6 +72,13 @@ struct Cli {
     )]
     cache_dir: Option<String>,
 
+    #[arg(
+        short = 'R',
+        long = "router",
+        help = "Headless router mode (OpenWrt): no TUI, config from the router cache dir by default"
+    )]
+    router: bool,
+
     #[arg(short = 'h', long = "help", help = "Show this help")]
     help: bool,
 }
@@ -85,6 +93,7 @@ fn show_help() {
     println!("{}", rust_i18n::t!("cli_opt_t"));
     println!("{}", rust_i18n::t!("cli_opt_u"));
     println!("{}", rust_i18n::t!("cli_opt_d"));
+    println!("{}", rust_i18n::t!("cli_opt_router"));
     println!("{}", rust_i18n::t!("cli_opt_h"));
     println!("{}", rust_i18n::t!("cli_modes"));
     println!("{}", rust_i18n::t!("cli_mode1"));
@@ -118,6 +127,8 @@ fn main() {
 
     if let Some(ref d) = args.cache_dir {
         std::env::set_var("ZAPRET_CACHE_DIR", d);
+    } else if args.router && std::env::var_os("ZAPRET_CACHE_DIR").is_none() {
+        std::env::set_var("ZAPRET_CACHE_DIR", router::DEFAULT_CACHE_DIR);
     }
 
     if let Err(e) = config::ensure_default_config() {
@@ -141,7 +152,13 @@ fn main() {
     let mut use_backend: LinuxBackend = LinuxBackend::Nftables;
     let mut is_interactive = true;
 
-    if let Some(config_file) = &args.config {
+    let config_file = match (&args.config, args.router) {
+        (Some(path), _) => Some(path.clone()),
+        (None, true) => Some(config::config_path().to_string_lossy().into_owned()),
+        (None, false) => None,
+    };
+
+    if let Some(config_file) = &config_file {
         println!("{}{}", rust_i18n::t!("msg_load_cfg"), config_file);
         match config::load_config(config_file) {
             Ok(cfg) => {
@@ -164,6 +181,15 @@ fn main() {
         }
     } else if use_strategy.is_some() {
         is_interactive = false;
+    }
+
+    if args.router {
+        is_interactive = false;
+        if use_strategy.as_deref().map_or(true, str::is_empty) {
+            eprintln!("{}", rust_i18n::t!("router_err_no_strategy"));
+            exit(1);
+        }
+        router::print_preflight();
     }
 
     #[cfg(not(target_os = "windows"))]

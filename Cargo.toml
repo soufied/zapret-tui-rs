@@ -1,10 +1,10 @@
 [package]
-name = "zapret-rust"
+name = "zapret-tui-rs"
 version = "2.3.0"
 edition = "2021"
 license = "MIT"
-description = "Zapret-Rust TUI implementation for DPI bypass"
-repository = "https://github.com/Sergeydigl3/zapret-discord-youtube-rust"
+description = "zapret Rust TUI implementation for DPI bypass"
+repository = "https://github.com/soufied/zapret-tui-rs"
 
 [dependencies]
 clap = { version = "4.4", features = ["derive"] }

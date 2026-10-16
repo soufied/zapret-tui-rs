@@ -5,6 +5,8 @@ pub mod init;
 #[cfg(target_os = "linux")]
 pub mod openrc;
 #[cfg(target_os = "linux")]
+pub mod procd;
+#[cfg(target_os = "linux")]
 pub mod runit;
 #[cfg(target_os = "linux")]
 pub mod s6;
@@ -17,6 +19,8 @@ pub use dinit::DinitManager;
 pub use init::InitManager;
 #[cfg(target_os = "linux")]
 pub use openrc::OpenRcManager;
+#[cfg(target_os = "linux")]
+pub use procd::ProcdManager;
 #[cfg(target_os = "linux")]
 pub use runit::RunitManager;
 #[cfg(target_os = "linux")]
@@ -76,6 +80,8 @@ pub enum InitType {
     S6,
     #[cfg(target_os = "linux")]
     Init,
+    #[cfg(target_os = "linux")]
+    Procd,
     #[cfg(target_os = "windows")]
     Windows,
 }
@@ -95,6 +101,8 @@ impl InitType {
             Self::S6 => "s6",
             #[cfg(target_os = "linux")]
             Self::Init => "init",
+            #[cfg(target_os = "linux")]
+            Self::Procd => "procd",
             #[cfg(target_os = "windows")]
             Self::Windows => "windows",
         }
@@ -109,6 +117,10 @@ pub fn detect_init_system() -> Option<InitType> {
 
     #[cfg(target_os = "linux")]
     {
+        if crate::router::is_openwrt() && Path::new("/etc/rc.common").exists() {
+            return Some(InitType::Procd);
+        }
+
         if Path::new("/run/systemd/system").exists() {
             return Some(InitType::Systemd);
         }
@@ -172,6 +184,8 @@ pub fn get_manager_named(init_type: InitType, name: &'static str) -> Box<dyn Ser
         InitType::S6 => Box::new(S6Manager::new(name)),
         #[cfg(target_os = "linux")]
         InitType::Init => Box::new(InitManager::new(name)),
+        #[cfg(target_os = "linux")]
+        InitType::Procd => Box::new(ProcdManager::new(name)),
 
         #[cfg(target_os = "windows")]
         InitType::Windows => {
