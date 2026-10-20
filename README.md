@@ -503,6 +503,12 @@ flake.nix           Nix flake (package, dev shell, overlay, module)
 
 ---
 
+## Credits
+
+- [bol-van/zapret](https://github.com/bol-van/zapret) (nfqws) and [bol-van/zapret2](https://github.com/bol-van/zapret2) (nfqws2)
+- [Flowseal/zapret-discord-youtube](https://github.com/Flowseal/zapret-discord-youtube): zapret 1 strategies
+- [zapretdiscordyoutube/zapret2-youtube-discord](https://git.zapret.moe/zapretdiscordyoutube/zapret2-youtube-discord): zapret 2 presets, Lua scripts and lists
+
 ## License
 
 MIT
