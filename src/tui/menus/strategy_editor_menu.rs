@@ -1,4 +1,4 @@
-use crate::config::ZapretEngine;
+use crate::common::config::ZapretEngine;
 use crate::strategy::discovery::is_valid_preset_name;
 use crate::strategy::parser::parse_preset_content;
 use crate::strategy::refs::{collect_list_refs, list_file_present, resolve_within, ListRef, ListRefKind};

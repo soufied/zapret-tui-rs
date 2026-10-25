@@ -15,3 +15,9 @@ pub trait FirewallBackend {
 
 #[cfg(target_os = "linux")]
 pub use backends::LinuxBackend;
+
+#[cfg(not(any(target_os = "linux", target_os = "windows")))]
+pub mod unsupported;
+
+#[cfg(not(any(target_os = "linux", target_os = "windows")))]
+pub use unsupported::UnsupportedBackend;

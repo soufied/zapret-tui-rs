@@ -34,7 +34,7 @@ pub mod winservice;
 #[cfg(target_os = "windows")]
 pub use winservice::WindowsServiceManager;
 
-use crate::config::ZapretEngine;
+use crate::common::config::ZapretEngine;
 use std::path::Path;
 
 pub const LEGACY_SERVICE_NAME: &str = "zapret-rust";
@@ -117,7 +117,7 @@ pub fn detect_init_system() -> Option<InitType> {
 
     #[cfg(target_os = "linux")]
     {
-        if crate::router::is_openwrt() && Path::new("/etc/rc.common").exists() {
+        if crate::engine::router::is_openwrt() && Path::new("/etc/rc.common").exists() {
             return Some(InitType::Procd);
         }
 

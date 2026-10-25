@@ -75,10 +75,10 @@ fn embed_windows_resources() {
     let version = env::var("CARGO_PKG_VERSION").unwrap_or_else(|_| "0.0.0".to_string());
 
     let mut resource = winresource::WindowsResource::new();
-    resource.set_manifest_file("app.manifest");
+    resource.set_manifest_file("packaging/windows/app.manifest");
     resource.set("FileDescription", "Zapret-Rust DPI bypass controller");
     resource.set("ProductName", "Zapret-Rust");
-    resource.set("LegalCopyright", "MIT");
+    resource.set("LegalCopyright", "GPL-3.0-only");
     resource.set("OriginalFilename", "zapret-rust.exe");
     resource.set("FileVersion", &version);
     resource.set("ProductVersion", &version);
@@ -91,7 +91,7 @@ fn embed_windows_resources() {
         println!("cargo:warning=windows resource embedding skipped: {}", error);
     }
 
-    println!("cargo:rerun-if-changed=app.manifest");
+    println!("cargo:rerun-if-changed=packaging/windows/app.manifest");
     println!("cargo:rerun-if-changed=assets/app.ico");
 }
 

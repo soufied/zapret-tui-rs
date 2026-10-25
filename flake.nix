@@ -10,7 +10,7 @@
     in
     {
       packages = forAllSystems (pkgs: {
-        zapret-rust = pkgs.callPackage ./nix/package.nix { src = self; };
+        zapret-rust = pkgs.callPackage ./packaging/nix/package.nix { src = self; };
         default = self.packages.${pkgs.stdenv.hostPlatform.system}.zapret-rust;
       });
 
@@ -32,7 +32,7 @@
       };
 
       nixosModules.default = { lib, pkgs, ... }: {
-        imports = [ ./nix/module.nix ];
+        imports = [ ./packaging/nix/module.nix ];
         services.zapret-rust.package = lib.mkDefault
           self.packages.${pkgs.stdenv.hostPlatform.system}.zapret-rust;
       };

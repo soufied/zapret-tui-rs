@@ -1,8 +1,7 @@
-use crate::autotune::{render_matrix, MatrixRow, ServiceStatus, PRESETS};
+use crate::diagnostics::autotune::PRESETS;
 use crate::tui::state::{AppState, AutotuneBlockChecksState, AutotuneMenuState, AutotuneProtocolsState};
 use crate::tui::theme::{toggle_marker, Theme};
 use ratatui::{
-    style::{Color, Style},
     text::{Line, Span},
     widgets::ListItem,
 };
@@ -175,26 +174,6 @@ pub fn render_config(app: &AppState) -> (Vec<ListItem<'static>>, String, usize) 
         },
     )])));
 
-    let is_sel = app.autotune_menu == AutotuneMenuState::ServiceMatrix;
-    items.push(ListItem::new(Line::from(vec![
-        Span::styled(
-            format!(" {}: ", rust_i18n::t!("menu_autotune_matrix")),
-            if is_sel {
-                Theme::selected_item()
-            } else {
-                Theme::normal_item()
-            },
-        ),
-        Span::styled(
-            format!("< {} >", app.service_matrix_summary()),
-            if is_sel {
-                Theme::selected_value()
-            } else {
-                Theme::normal_value()
-            },
-        ),
-    ])));
-
     let is_sel = app.autotune_menu == AutotuneMenuState::Results;
     let has_file = app.has_autotune_results_file;
     let results_label = if has_file {
@@ -225,9 +204,9 @@ pub fn render_config(app: &AppState) -> (Vec<ListItem<'static>>, String, usize) 
         ),
     ])));
 
-    let is_sel = app.autotune_menu == AutotuneMenuState::Run;
+    let is_sel = app.autotune_menu == AutotuneMenuState::Blockcheck;
     items.push(ListItem::new(Line::from(vec![Span::styled(
-        format!(" {}", rust_i18n::t!("menu_autotune_run")),
+        format!(" {}", rust_i18n::t!("menu_autotune_blockcheck")),
         if is_sel {
             Theme::selected_item()
         } else {
@@ -372,7 +351,7 @@ pub fn render_blockchecks(
     app: &AppState,
     bc_menu: AutotuneBlockChecksState,
 ) -> (Vec<ListItem<'static>>, String, usize) {
-    use crate::autotune::BlockCheckType;
+    use crate::diagnostics::autotune::BlockCheckType;
     let mut items: Vec<ListItem<'static>> = Vec::new();
     let mut selected_index = 0;
 
@@ -546,7 +525,7 @@ pub fn render_strategies(app: &AppState, selected: usize) -> (Vec<ListItem<'stat
 pub fn render_results(_app: &AppState, scroll: usize) -> (Vec<ListItem<'static>>, String, usize) {
     let mut items: Vec<ListItem<'static>> = Vec::new();
 
-    if let Some(cached) = crate::autotune::load_results_file() {
+    if let Some(cached) = crate::diagnostics::autotune::load_results_file() {
         for line in cached.lines() {
             items.push(ListItem::new(Line::from(Span::raw(format!(" {}", line)))));
         }
@@ -572,110 +551,6 @@ pub fn render_results(_app: &AppState, scroll: usize) -> (Vec<ListItem<'static>>
         rust_i18n::t!("tui_title_autotune_results").into_owned(),
         selected,
     )
-}
-
-fn matrix_status_style(status: ServiceStatus) -> Style {
-    match status {
-        ServiceStatus::Ok => Theme::active_value(),
-        ServiceStatus::Degraded => Theme::warning(),
-        ServiceStatus::Blocked => Theme::inactive_value(),
-        ServiceStatus::Skipped => Theme::dim_item(),
-    }
-}
-
-fn matrix_row_style(row: &MatrixRow) -> Style {
-    if row.unblocks_everything() {
-        Theme::active_value()
-    } else if row.youtube.is_usable() || row.discord_text.is_usable() || row.discord_voice.is_usable() {
-        Theme::warning()
-    } else {
-        Theme::inactive_value()
-    }
-}
-
-pub fn render_service_matrix(app: &AppState, scroll: usize) -> (Vec<ListItem<'static>>, String, usize) {
-    let mut items: Vec<ListItem<'static>> = Vec::new();
-
-    if app.service_matrix_rows.is_empty() {
-        items.push(ListItem::new(Line::from(Span::styled(
-            format!(" {}", rust_i18n::t!("autotune_matrix_empty")),
-            Theme::hint(),
-        ))));
-    } else {
-        let lines = render_matrix(&app.service_matrix_rows);
-        for (index, line) in lines.iter().enumerate() {
-            let style = if index < 2 {
-                Theme::dim_item()
-            } else {
-                app.service_matrix_rows
-                    .get(index - 2)
-                    .map(matrix_row_style)
-                    .unwrap_or_else(Theme::normal_item)
-            };
-            items.push(ListItem::new(Line::from(Span::styled(format!(" {}", line), style))));
-        }
-
-        items.push(ListItem::new(Line::from(Span::raw(String::new()))));
-        items.push(ListItem::new(Line::from(Span::styled(
-            format!(" {}", rust_i18n::t!("autotune_matrix_legend")),
-            Theme::hint(),
-        ))));
-
-        if !app.service_matrix_reports.is_empty() {
-            items.push(ListItem::new(Line::from(Span::styled(
-                format!(" {}", rust_i18n::t!("autotune_matrix_details")),
-                Theme::block_title(),
-            ))));
-
-            for report in &app.service_matrix_reports {
-                items.push(ListItem::new(Line::from(vec![
-                    Span::styled(format!("   {}: ", report.service), Theme::normal_item()),
-                    Span::styled(report.status.symbol().to_string(), matrix_status_style(report.status)),
-                    Span::styled(
-                        format!(" [{}ms] {}", report.elapsed_ms, report.detail),
-                        Theme::hint(),
-                    ),
-                ])));
-            }
-        }
-
-        items.push(ListItem::new(Line::from(vec![
-            Span::styled(
-                format!(" {} ", rust_i18n::t!("autotune_matrix_elapsed")),
-                Theme::dim_item(),
-            ),
-            Span::styled(
-                format!("{}ms", app.service_matrix_elapsed_ms),
-                Theme::normal_value(),
-            ),
-        ])));
-    }
-
-    let back_index = items.len();
-    items.push(
-        ListItem::new(format!(" {}", rust_i18n::t!("menu_autotune_back"))).style(if scroll >= back_index {
-            Theme::selected_item()
-        } else {
-            Theme::normal_item()
-        }),
-    );
-
-    let selected = scroll.min(back_index);
-    (
-        items,
-        rust_i18n::t!("tui_title_autotune_matrix").into_owned(),
-        selected,
-    )
-}
-
-pub fn render_header() -> (Vec<ListItem<'static>>, String, usize) {
-    let items: Vec<ListItem<'static>> = vec![ListItem::new(Line::from(vec![Span::styled(
-        rust_i18n::t!("autotune_running"),
-        Style::default()
-            .fg(Color::Cyan)
-            .add_modifier(ratatui::style::Modifier::BOLD),
-    )]))];
-    (items, rust_i18n::t!("menu_autotune_title").into_owned(), 0)
 }
 
 fn menu_line(label: String, value: Option<String>, selected: bool) -> ListItem<'static> {
@@ -750,11 +625,6 @@ pub fn render_config_zapret2(app: &AppState) -> (Vec<ListItem<'static>>, String,
                     selected,
                 )
             }
-            AutotuneMenuState::ServiceMatrix => menu_line(
-                format!(" {}: ", rust_i18n::t!("menu_autotune_matrix")),
-                Some(format!("‹ {} ›", app.service_matrix_summary())),
-                selected,
-            ),
             AutotuneMenuState::Results => {
                 let label = if app.has_autotune_results_file {
                     format!("‹ {} ›", rust_i18n::t!("menu_autotune_view"))
@@ -767,16 +637,7 @@ pub fn render_config_zapret2(app: &AppState) -> (Vec<ListItem<'static>>, String,
                     selected,
                 )
             }
-            AutotuneMenuState::Run => menu_line(
-                format!(
-                    " {}  ({} x {})",
-                    rust_i18n::t!("menu_autotune_run"),
-                    preset_count,
-                    target_count
-                ),
-                None,
-                selected,
-            ),
+            AutotuneMenuState::Blockcheck => menu_line(format!(" {}", rust_i18n::t!("menu_autotune_blockcheck")), None, selected),
             _ => menu_line(format!(" {}", rust_i18n::t!("menu_autotune_back")), None, selected),
         };
         items.push(item);

@@ -243,13 +243,13 @@ pub fn render(app: &AppState) -> (Vec<ListItem<'static>>, String, usize) {
         Some(app.selected_backend.to_string()),
     );
 
-    let ipset_value = if crate::ipset::engine_uses_global_ipset_mode(&app.engine) {
+    let ipset_value = if crate::common::ipset::engine_uses_global_ipset_mode(&app.engine) {
         app.available_ipset_modes
             .get(app.selected_ipset_mode)
             .map(|m| m.to_string())
             .unwrap_or_else(|| rust_i18n::t!("val_none").into_owned())
     } else {
-        crate::ipset::legacy_mode_notice()
+        crate::common::ipset::legacy_mode_notice()
     };
 
     b.push(

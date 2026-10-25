@@ -195,7 +195,7 @@ fn my_service_main(_arguments: Vec<std::ffi::OsString>) {
         std::env::set_var("ZAPRET_CACHE_DIR", d);
     }
 
-    let cfg = match crate::config::load_config(&config_file) {
+    let cfg = match crate::common::config::load_config(&config_file) {
         Ok(c) => c,
         Err(_) => {
             report_stopped(&status_handle, 2);
@@ -205,7 +205,7 @@ fn my_service_main(_arguments: Vec<std::ffi::OsString>) {
 
     let backend = crate::firewalls::windivert::WinDivertBackend;
 
-    if let Err(e) = crate::runner::run_zapret(
+    if let Err(e) = crate::engine::runner::run_zapret(
         &cfg.strategy,
         &cfg.interface,
         cfg.gamefilter_tcp,
@@ -213,14 +213,14 @@ fn my_service_main(_arguments: Vec<std::ffi::OsString>) {
         &backend,
     ) {
         eprintln!("{}", e);
-        crate::runner::stop_zapret_quiet(&backend);
+        crate::engine::runner::stop_zapret_quiet(&backend);
         report_stopped(&status_handle, 1);
         return;
     }
 
     while RUNNING.load(Ordering::SeqCst) {
         thread::sleep(Duration::from_millis(100));
-        if !crate::runner::nfqws_process_running() {
+        if !crate::engine::runner::nfqws_process_running() {
             break;
         }
     }
@@ -235,7 +235,7 @@ fn my_service_main(_arguments: Vec<std::ffi::OsString>) {
         process_id: None,
     });
 
-    crate::runner::stop_zapret(&backend);
+    crate::engine::runner::stop_zapret(&backend);
 
     report_stopped(&status_handle, 0);
 }

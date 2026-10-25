@@ -15,37 +15,18 @@ use ratatui::{
     widgets::{Block, BorderType, Borders, List, ListState, Paragraph, Wrap},
     Frame, Terminal,
 };
-use std::io::{self, Write};
+use std::io;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError};
 use std::sync::Arc;
 use std::time::Duration;
 
-use crate::autotune::{CheckStatus, StrategyCheckResult};
 use crate::tui::menus;
 use crate::tui::state::{ActiveScreen, AppState, VersionTarget};
 use crate::tui::theme::{presence_marker, Theme};
 
 const TICK_MS: u64 = 200;
 const STATUS_REFRESH_TICKS: u32 = 15;
-
-fn status_str(s: &CheckStatus) -> &'static str {
-    match s {
-        CheckStatus::Pass => "✅",
-        CheckStatus::Fail => "❌",
-        CheckStatus::Skip => "⏩",
-        CheckStatus::Error => "🚨",
-    }
-}
-
-fn status_detail(s: &CheckStatus) -> &'static str {
-    match s {
-        CheckStatus::Pass => "No blocking detected",
-        CheckStatus::Fail => "Blocking detected",
-        CheckStatus::Skip => "Skipped",
-        CheckStatus::Error => "Error during check",
-    }
-}
 
 pub fn spawn_event_reader() -> EventReader {
     let (tx, rx) = mpsc::channel();
@@ -99,6 +80,62 @@ impl EventReader {
 
 fn drain_events(rx: &Receiver<Event>) {
     while rx.try_recv().is_ok() {}
+}
+
+fn wait_for_quit(
+    terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
+    rx: &Receiver<Event>,
+    title: &str,
+    elapsed: u64,
+) -> Result<(), io::Error> {
+    let hint = rust_i18n::t!("blockcheck_done").into_owned();
+    loop {
+        terminal.draw(|f| crate::tui::live::draw(f, title, &hint, elapsed))?;
+        match rx.recv_timeout(Duration::from_millis(100)) {
+            Ok(Event::Key(key)) => {
+                if key.code == KeyCode::Char('q') || key.code == KeyCode::Char('Q') || key.code == KeyCode::Esc {
+                    break;
+                }
+            }
+            Ok(_) => continue,
+            Err(RecvTimeoutError::Timeout) => continue,
+            Err(RecvTimeoutError::Disconnected) => break,
+        }
+    }
+    Ok(())
+}
+
+fn wait_for_results(
+    terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
+    rx: &Receiver<Event>,
+    title: &str,
+    columns: &[&str],
+    rows: &[Vec<String>],
+) -> Result<(), io::Error> {
+    let hint = rust_i18n::t!("blockcheck_done").into_owned();
+    let mut scroll = 0usize;
+    loop {
+        let capacity = crate::tui::live::results_capacity(terminal.size()?.height);
+        let max_scroll = rows.len().saturating_sub(capacity);
+        scroll = scroll.min(max_scroll);
+        terminal.draw(|f| crate::tui::live::draw_results(f, title, &hint, columns, rows, scroll))?;
+        match rx.recv_timeout(Duration::from_millis(100)) {
+            Ok(Event::Key(key)) => match key.code {
+                KeyCode::Char('q') | KeyCode::Char('Q') | KeyCode::Esc => break,
+                KeyCode::Up => scroll = scroll.saturating_sub(1),
+                KeyCode::Down => scroll = (scroll + 1).min(max_scroll),
+                KeyCode::PageUp => scroll = scroll.saturating_sub(capacity),
+                KeyCode::PageDown => scroll = (scroll + capacity).min(max_scroll),
+                KeyCode::Home => scroll = 0,
+                KeyCode::End => scroll = max_scroll,
+                _ => {}
+            },
+            Ok(_) => continue,
+            Err(RecvTimeoutError::Timeout) => continue,
+            Err(RecvTimeoutError::Disconnected) => break,
+        }
+    }
+    Ok(())
 }
 
 fn wait_for_key(rx: &Receiver<Event>) -> Result<(), io::Error> {
@@ -349,13 +386,7 @@ fn screen_body(app: &AppState) -> (Vec<ratatui::widgets::ListItem<'static>>, Str
             let active_name = app.strategies.get(app.selected_strategy).map(|s| s.as_str());
             menus::strategy_editor_menu::render(&app.strategy_editor_files, app.strategy_editor_index, active_name)
         }
-        ActiveScreen::AutotuneSubmenu => {
-            if app.autotune_running {
-                menus::autotune_menu::render_header()
-            } else {
-                menus::autotune_menu::render_config(app)
-            }
-        }
+        ActiveScreen::AutotuneSubmenu => menus::autotune_menu::render_config(app),
         ActiveScreen::AutotuneEditDomainsSubmenu => menus::autotune_menu::render_domain_files(app),
         ActiveScreen::AutotuneProtocolsSubmenu => {
             menus::autotune_menu::render_protocols(app, app.autotune_protocols_menu)
@@ -370,13 +401,50 @@ fn screen_body(app: &AppState) -> (Vec<ratatui::widgets::ListItem<'static>>, Str
             menus::autotune_menu::render_strategies(app, app.autotune_strat_index)
         }
         ActiveScreen::AutotuneResultsSubmenu => menus::autotune_menu::render_results(app, app.autotune_results_index),
-        ActiveScreen::AutotuneServiceMatrixSubmenu => {
-            menus::autotune_menu::render_service_matrix(app, app.service_matrix_index)
-        }
         ActiveScreen::SettingsSubmenu => menus::settings_menu::render(app),
         ActiveScreen::SettingsEditorSubmenu => menus::settings_menu::render_editor(app),
         ActiveScreen::LogViewer => menus::log_menu::render(&app.log_lines, app.log_scroll),
     }
+}
+
+fn draw_split_panel(
+    f: &mut Frame,
+    area: ratatui::layout::Rect,
+    list_title: String,
+    items: Vec<ratatui::widgets::ListItem<'static>>,
+    selected_index: usize,
+    inspector_title: String,
+    inspector_lines: Vec<Line<'static>>,
+) {
+    let columns = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([Constraint::Percentage(40), Constraint::Percentage(60)].as_ref())
+        .split(area);
+
+    let list_block = Block::default()
+        .title(Span::styled(list_title, Theme::block_title()))
+        .borders(Borders::ALL)
+        .border_type(BorderType::Rounded)
+        .border_style(Theme::border());
+    let list_area = list_block.inner(columns[0]);
+    f.render_widget(list_block, columns[0]);
+
+    let list = List::new(items).highlight_style(Style::default().add_modifier(Modifier::ITALIC));
+    let mut list_state = ListState::default();
+    list_state.select(Some(selected_index));
+    f.render_stateful_widget(list, list_area, &mut list_state);
+
+    let inspector_block = Block::default()
+        .title(Span::styled(inspector_title, Theme::block_title()))
+        .borders(Borders::ALL)
+        .border_type(BorderType::Rounded)
+        .border_style(Theme::border());
+    let inspector_area = inspector_block.inner(columns[1]);
+    f.render_widget(inspector_block, columns[1]);
+    f.render_widget(
+        Paragraph::new(inspector_lines).wrap(Wrap { trim: true }),
+        inspector_area,
+    );
 }
 
 fn draw(f: &mut Frame, app: &AppState) {
@@ -415,7 +483,38 @@ fn draw(f: &mut Frame, app: &AppState) {
         format!("  ·  {}/{}", selected_index.min(items.len() - 1) + 1, items.len())
     };
 
-    if app.active_screen == ActiveScreen::StrategyEditorSubmenu {
+    if app.active_screen == ActiveScreen::ListsEditorSubmenu {
+        let inspector_lines: Vec<Line<'static>> = match &app.lists_inspection {
+            Some(inspection) => menus::lists_menu::render_inspector(inspection)
+                .into_iter()
+                .map(Line::from)
+                .collect(),
+            None => vec![Line::from(rust_i18n::t!("tui_lists_inspector_empty").into_owned())],
+        };
+        draw_split_panel(
+            f,
+            chunks[2],
+            format!("{}{}", block_title, counter),
+            items,
+            selected_index,
+            rust_i18n::t!("tui_title_list_inspector").into_owned(),
+            inspector_lines,
+        );
+    } else if app.active_screen == ActiveScreen::DownloadDepsSubmenu {
+        let details_lines: Vec<Line<'static>> = menus::download_menu::details(app)
+            .into_iter()
+            .map(Line::from)
+            .collect();
+        draw_split_panel(
+            f,
+            chunks[2],
+            format!("{}{}", block_title, counter),
+            items,
+            selected_index,
+            rust_i18n::t!("tui_title_download_details").into_owned(),
+            details_lines,
+        );
+    } else if app.active_screen == ActiveScreen::StrategyEditorSubmenu {
         let columns = Layout::default()
             .direction(Direction::Horizontal)
             .constraints([Constraint::Percentage(40), Constraint::Percentage(60)].as_ref())
@@ -487,7 +586,7 @@ fn draw(f: &mut Frame, app: &AppState) {
         let inner = list_block.inner(chunks[2]);
         f.render_widget(list_block, chunks[2]);
 
-        let list_area = if app.active_screen == ActiveScreen::AutotuneSubmenu && !app.autotune_running {
+        let list_area = if app.active_screen == ActiveScreen::AutotuneSubmenu {
             let sub = Layout::default()
                 .direction(Direction::Vertical)
                 .constraints([Constraint::Length(2), Constraint::Min(1)].as_ref())
@@ -680,7 +779,6 @@ fn handle_key(app: &mut AppState, key: KeyEvent) {
             | ActiveScreen::AutotuneZ2PresetsSubmenu
             | ActiveScreen::AutotuneZ2TargetsSubmenu
             | ActiveScreen::AutotuneResultsSubmenu
-            | ActiveScreen::AutotuneServiceMatrixSubmenu
             | ActiveScreen::AutotuneEditDomainsSubmenu => {
                 app.active_screen = ActiveScreen::AutotuneSubmenu;
             }
@@ -775,7 +873,7 @@ pub fn run_tui(app: &mut AppState, reader: &EventReader) -> Result<(), io::Error
 
             let nfqws_target_string;
             let nfqws_ver = match &app.nfqws_target {
-                VersionTarget::Recommended => crate::download::ZAPRET_REC_VER,
+                VersionTarget::Recommended => crate::common::download::ZAPRET_REC_VER,
                 VersionTarget::Latest => "latest",
                 VersionTarget::Tag(t) => {
                     nfqws_target_string = t.clone();
@@ -784,7 +882,7 @@ pub fn run_tui(app: &mut AppState, reader: &EventReader) -> Result<(), io::Error
             };
 
             let res = run_download(&mut terminal, rx, || {
-                crate::download::install_dependencies(nfqws_ver, "skip")
+                crate::common::download::install_dependencies(nfqws_ver, "skip")
             })?;
 
             if let Err(e) = res {
@@ -800,7 +898,7 @@ pub fn run_tui(app: &mut AppState, reader: &EventReader) -> Result<(), io::Error
         if app.should_download_zapret2 {
             app.should_download_zapret2 = false;
 
-            let res = run_download(&mut terminal, rx, || crate::download::install_zapret2("latest"))?;
+            let res = run_download(&mut terminal, rx, || crate::common::download::install_zapret2("latest"))?;
 
             if let Err(e) = res {
                 app.show_error(e.to_string());
@@ -818,7 +916,7 @@ pub fn run_tui(app: &mut AppState, reader: &EventReader) -> Result<(), io::Error
         if app.should_download_zapret2_strategies {
             app.should_download_zapret2_strategies = false;
 
-            let res = run_download(&mut terminal, rx, crate::download::download_zapret2_strategies)?;
+            let res = run_download(&mut terminal, rx, crate::common::download::download_zapret2_strategies)?;
 
             if let Err(e) = res {
                 app.show_error(e.to_string());
@@ -847,7 +945,7 @@ pub fn run_tui(app: &mut AppState, reader: &EventReader) -> Result<(), io::Error
             };
 
             let res = run_download(&mut terminal, rx, || {
-                crate::download::install_dependencies("skip", strat_ver)
+                crate::common::download::install_dependencies("skip", strat_ver)
             })?;
 
             if let Err(e) = res {
@@ -864,7 +962,7 @@ pub fn run_tui(app: &mut AppState, reader: &EventReader) -> Result<(), io::Error
         if app.should_download_defaults {
             app.should_download_defaults = false;
 
-            let res = run_download(&mut terminal, rx, crate::download::install_everything)?;
+            let res = run_download(&mut terminal, rx, crate::common::download::install_everything)?;
 
             if let Err(e) = res {
                 app.show_error(e.to_string());
@@ -883,7 +981,7 @@ pub fn run_tui(app: &mut AppState, reader: &EventReader) -> Result<(), io::Error
         if let Some(file_path) = app.should_open_editor.take() {
             let return_screen = app.active_screen;
 
-            let resolution = crate::utils::resolve_editor_detailed();
+            let resolution = crate::common::utils::resolve_editor_detailed();
             if let Some(skipped) = &resolution.skipped_configured {
                 app.status_message = Some(format!(
                     "{}{}{}",
@@ -903,10 +1001,10 @@ pub fn run_tui(app: &mut AppState, reader: &EventReader) -> Result<(), io::Error
 
             let opened = if needs_terminal {
                 with_terminal_suspended(&mut terminal, reader, || {
-                    crate::utils::open_editor_detailed(&file_path)
+                    crate::common::utils::open_editor_detailed(&file_path)
                 })?
             } else {
-                crate::utils::open_editor_detailed(&file_path)
+                crate::common::utils::open_editor_detailed(&file_path)
             };
 
             let file_name = std::path::Path::new(&file_path)
@@ -917,10 +1015,10 @@ pub fn run_tui(app: &mut AppState, reader: &EventReader) -> Result<(), io::Error
 
             match opened {
                 Ok(launch) => match launch.session {
-                    crate::utils::EditorSession::Detached(command) => {
+                    crate::common::utils::EditorSession::Detached(command) => {
                         app.status_message = Some(format!("{} -> {}", command, file_name));
                     }
-                    crate::utils::EditorSession::Closed(_) => {
+                    crate::common::utils::EditorSession::Closed(_) => {
                         app.status_message =
                             Some(format!("{}{}", rust_i18n::t!("msg_closed_editor"), file_name));
                     }
@@ -933,6 +1031,7 @@ pub fn run_tui(app: &mut AppState, reader: &EventReader) -> Result<(), io::Error
             app.active_screen = return_screen;
             if return_screen == ActiveScreen::ListsEditorSubmenu {
                 app.refresh_ipset_status();
+                app.refresh_lists_inspection();
             }
             if return_screen == ActiveScreen::StrategyEditorSubmenu {
                 app.refresh_strategy_editor_inspection();
@@ -943,7 +1042,7 @@ pub fn run_tui(app: &mut AppState, reader: &EventReader) -> Result<(), io::Error
         if app.should_sync_community_strategies {
             app.should_sync_community_strategies = false;
 
-            match crate::ingest::sync_community_strategies(None) {
+            match crate::common::ingest::sync_community_strategies(None) {
                 Ok(summary) => {
                     app.status_message = Some(summary.render().join("\n"));
                     app.refresh_strategy_editor_files();
@@ -957,386 +1056,84 @@ pub fn run_tui(app: &mut AppState, reader: &EventReader) -> Result<(), io::Error
             dirty = true;
         }
 
-        if app.should_run_service_matrix {
-            app.should_run_service_matrix = false;
-            app.autotune_running = true;
+        if app.should_run_blockcheck {
+            app.should_run_blockcheck = false;
+            crate::diagnostics::blockcheck::CANCEL.store(false, Ordering::SeqCst);
+            let interface = app
+                .interfaces
+                .get(app.selected_interface)
+                .cloned()
+                .unwrap_or_else(|| "any".to_string());
+            #[cfg(target_os = "linux")]
+            let backend: &dyn crate::firewalls::FirewallBackend = &app.selected_backend;
+            #[cfg(target_os = "windows")]
+            let backend: &dyn crate::firewalls::FirewallBackend = &crate::firewalls::windivert::WinDivertBackend;
+            #[cfg(not(any(target_os = "linux", target_os = "windows")))]
+            let backend: &dyn crate::firewalls::FirewallBackend = &crate::firewalls::UnsupportedBackend;
 
-            begin_external_output(&mut terminal)?;
-
-            println!("{}", rust_i18n::t!("autotune_matrix_running"));
-            println!();
-
-            crate::autotune::reset_cancel();
-            drain_events(rx);
+            let opts = crate::diagnostics::blockcheck::Options {
+                engine: app.engine.clone(),
+                interface,
+                names: app.blockcheck_names(),
+                limit: 0,
+                per_list: 5,
+                services: Vec::new(),
+                domains: app.blockcheck_domains(),
+            };
             let start_time = std::time::Instant::now();
+            drain_events(rx);
+            crate::diagnostics::events::begin_live();
 
-            let live_label = app.service_matrix_label();
-            let profiles = app.service_matrix_profiles();
-
-            println!("  {} {}", rust_i18n::t!("autotune_matrix_probing"), live_label);
-            let _ = io::stdout().flush();
-            let reports = crate::autotune::probe_all();
-            let mut rows = vec![crate::autotune::MatrixRow::from_reports(&live_label, &reports)];
-
-            for profile in &profiles {
-                if crate::autotune::is_cancelled() {
-                    break;
-                }
-                println!("  {} {}", rust_i18n::t!("autotune_matrix_probing"), profile);
-                let _ = io::stdout().flush();
-                rows.extend(crate::autotune::run_matrix(std::slice::from_ref(profile)));
+            terminal.clear()?;
+            let live_term = std::cell::RefCell::new(&mut terminal);
+            let result = crate::diagnostics::blockcheck::run(&opts, backend, &|done, total| {
+                crate::diagnostics::events::set_progress(done, total);
+                let _ = live_term.borrow_mut().draw(|f| {
+                    crate::tui::live::draw(
+                        f,
+                        &rust_i18n::t!("tui_title_blockcheck"),
+                        &rust_i18n::t!("blockcheck_running"),
+                        start_time.elapsed().as_secs(),
+                    )
+                });
 
                 while let Ok(event) = rx.try_recv() {
                     if let Event::Key(key) = event {
-                        if key.code == KeyCode::Char('q') || key.code == KeyCode::Char('Q') || key.code == KeyCode::Esc
+                        if key.code == KeyCode::Char('q')
+                            || key.code == KeyCode::Char('Q')
+                            || key.code == KeyCode::Esc
                         {
-                            crate::autotune::trigger_cancel();
+                            crate::diagnostics::blockcheck::CANCEL.store(true, Ordering::SeqCst);
+                            return false;
                         }
                     }
                 }
-            }
-
-            let elapsed_ms = start_time.elapsed().as_millis();
-            let cancelled = crate::autotune::is_cancelled();
-            crate::autotune::reset_cancel();
-
-            println!();
-            for line in crate::autotune::render_matrix(&rows) {
-                println!("  {}", line);
-            }
-            println!();
-            for report in &reports {
-                println!(
-                    "  {}: {} [{}ms] {}",
-                    report.service,
-                    report.status.symbol(),
-                    report.elapsed_ms,
-                    report.detail
-                );
-            }
-            println!();
-            if cancelled {
-                println!("{}", rust_i18n::t!("autotune_matrix_cancelled"));
-            } else {
-                println!("{}", rust_i18n::t!("autotune_matrix_done"));
-            }
-            println!();
-            println!("{}", rust_i18n::t!("msg_dl_key"));
-
-            wait_for_key(rx)?;
-            end_external_output(&mut terminal, rx)?;
-
-            let all_clear = rows.iter().all(|row| row.unblocks_everything());
-            app.service_matrix_rows = rows;
-            app.service_matrix_reports = reports;
-            app.service_matrix_elapsed_ms = elapsed_ms;
-            app.service_matrix_index = 0;
-            app.autotune_running = false;
-            app.active_screen = ActiveScreen::AutotuneServiceMatrixSubmenu;
-            app.status_message = Some(if cancelled {
-                rust_i18n::t!("autotune_matrix_cancelled").into_owned()
-            } else if all_clear {
-                rust_i18n::t!("autotune_matrix_all_ok").into_owned()
-            } else {
-                rust_i18n::t!("autotune_matrix_blocked").into_owned()
+                true
             });
-            dirty = true;
-        }
-
-        if app.should_run_autotune && app.engine == crate::config::ZapretEngine::Zapret2 {
-            app.should_run_autotune = false;
-            app.autotune_running = true;
-            app.autotune_results = None;
-
-            begin_external_output(&mut terminal)?;
-
-            println!("{}", rust_i18n::t!("autotune_z2_running"));
-            println!();
-
-            let interface = app
-                .interfaces
-                .get(app.selected_interface)
-                .map(|s| s.as_str())
-                .unwrap_or("any");
-            #[cfg(target_os = "linux")]
-            let backend: &dyn crate::firewalls::FirewallBackend = &app.selected_backend;
-            #[cfg(target_os = "windows")]
-            let backend: &dyn crate::firewalls::FirewallBackend = &crate::firewalls::windivert::WinDivertBackend;
-
-            let start_time = std::time::Instant::now();
-            drain_events(rx);
-
-            let z2_config = app.z2_config();
-            let results = crate::autotune::run_zapret2_autotune(
-                &|done, total| {
-                    let pct = done * 100 / total.max(1);
-                    let elapsed_sec = start_time.elapsed().as_secs();
-                    println!(
-                        "  {} {}/{} ({}%) [{:02}:{:02}]",
-                        rust_i18n::t!("autotune_progress"),
-                        done,
-                        total,
-                        pct,
-                        elapsed_sec / 60,
-                        elapsed_sec % 60
-                    );
-                    let _ = io::stdout().flush();
-
-                    while let Ok(event) = rx.try_recv() {
-                        if let Event::Key(key) = event {
-                            if key.code == KeyCode::Char('q')
-                                || key.code == KeyCode::Char('Q')
-                                || key.code == KeyCode::Esc
-                            {
-                                crate::autotune::trigger_cancel();
-                                return false;
-                            }
-                        }
-                    }
-                    true
-                },
-                backend,
-                interface,
-                &z2_config,
-            );
-
-            println!();
-            if results.cancelled {
-                println!("{}", rust_i18n::t!("autotune_cancelled"));
-            }
-            println!("--- {} ---", rust_i18n::t!("autotune_z2_ranking"));
-            if results.ranking.is_empty() {
-                println!("  {}", rust_i18n::t!("autotune_strat_none_work"));
-            } else {
-                for (position, &idx) in results.ranking.iter().enumerate() {
-                    let pr = &results.presets[idx];
-                    let latency = pr.avg_latency_ms();
-                    let latency_str = if latency == u64::MAX {
-                        "n/a".to_string()
-                    } else {
-                        format!("{}ms", latency)
-                    };
-                    println!(
-                        "  {}. {} - {}/{} ({})",
-                        position + 1,
-                        pr.preset,
-                        pr.successes(),
-                        pr.total(),
-                        latency_str
-                    );
+            drop(live_term);
+            let elapsed = start_time.elapsed().as_secs();
+            let title = rust_i18n::t!("tui_title_blockcheck").into_owned();
+            match result {
+                Ok(report) => {
+                    let rows: Vec<Vec<String>> = report
+                        .records
+                        .iter()
+                        .map(crate::diagnostics::blockcheck::table_cells)
+                        .collect();
+                    wait_for_results(
+                        &mut terminal,
+                        rx,
+                        &title,
+                        crate::diagnostics::blockcheck::TABLE_COLUMNS,
+                        &rows,
+                    )?;
+                }
+                Err(e) => {
+                    crate::diagnostics::events::say(format!("{}{}", rust_i18n::t!("msg_err"), e));
+                    wait_for_quit(&mut terminal, rx, &title, elapsed)?;
                 }
             }
-            if let Some(ref best) = results.best {
-                println!();
-                println!("{} {}", rust_i18n::t!("autotune_z2_best"), best);
-            }
-            println!();
-            println!("{}", rust_i18n::t!("msg_dl_key"));
-
-            wait_for_key(rx)?;
-            end_external_output(&mut terminal, rx)?;
-
-            app.autotune_running = false;
-            app.has_autotune_results_file = true;
-            app.reload_strategies();
-            if let Some(best) = results.best.clone() {
-                if let Some(pos) = app.strategies.iter().position(|s| *s == best) {
-                    app.selected_strategy = pos;
-                    app.strategy_menu_index = pos;
-                }
-                app.status_message = Some(format!("{} {}", rust_i18n::t!("autotune_z2_best"), best));
-            } else {
-                app.status_message = Some(rust_i18n::t!("autotune_strat_none_work").into_owned());
-            }
-            dirty = true;
-        }
-
-        if app.should_run_autotune {
-            app.should_run_autotune = false;
-            app.autotune_running = true;
-            app.autotune_results = None;
-
-            begin_external_output(&mut terminal)?;
-
-            println!("{}", rust_i18n::t!("autotune_running"));
-            println!();
-            let config = &app.autotune_config;
-            let interface = app
-                .interfaces
-                .get(app.selected_interface)
-                .map(|s| s.as_str())
-                .unwrap_or("any");
-            #[cfg(target_os = "linux")]
-            let backend: &dyn crate::firewalls::FirewallBackend = &app.selected_backend;
-            #[cfg(target_os = "windows")]
-            let backend: &dyn crate::firewalls::FirewallBackend = &crate::firewalls::windivert::WinDivertBackend;
-
-            let start_time = std::time::Instant::now();
-            drain_events(rx);
-
-            let results = crate::autotune::run_all(
-                config,
-                &|done, total| {
-                    let pct = done * 100 / total.max(1);
-                    let elapsed_sec = start_time.elapsed().as_secs();
-                    let mins = elapsed_sec / 60;
-                    let secs = elapsed_sec % 60;
-                    print!(
-                        "\r  {} {}/{} ({}%) [{:02}:{:02}]",
-                        rust_i18n::t!("autotune_progress"),
-                        done,
-                        total,
-                        pct,
-                        mins,
-                        secs
-                    );
-                    let _ = io::stdout().flush();
-
-                    while let Ok(event) = rx.try_recv() {
-                        if let Event::Key(key) = event {
-                            if key.code == KeyCode::Char('q')
-                                || key.code == KeyCode::Char('Q')
-                                || key.code == KeyCode::Esc
-                            {
-                                crate::autotune::trigger_cancel();
-                                crate::runner::stop_zapret(backend);
-                                return false;
-                            }
-                        }
-                    }
-                    true
-                },
-                backend,
-                interface,
-            );
-            println!();
-            app.has_autotune_results_file = true;
-            app.dpi_desync_ttl = crate::config::load_ttl();
-
-            let total_mins = results.elapsed_secs / 60;
-            let total_secs = results.elapsed_secs % 60;
-            println!();
-            println!("{}", rust_i18n::t!("autotune_done"));
-            println!(
-                "⏱  {} {:02}:{:02}",
-                rust_i18n::t!("autotune_time_elapsed"),
-                total_mins,
-                total_secs
-            );
-            println!();
-            println!("{}", rust_i18n::t!("autotune_how_to_read"));
-            println!();
-            println!("--- {} ---", rust_i18n::t!("menu_autotune_net_checks"));
-            let check_labels = ["DNS", "TCP RST", "SNI", "SIBERIAN", "QUIC", "CIDR"];
-            for (label, check) in check_labels.iter().zip(&results.block_results) {
-                println!(
-                    "  {}: {} - {}",
-                    label,
-                    status_str(&check.status),
-                    status_detail(&check.status)
-                );
-            }
-            println!();
-
-            for pr in &results.preset_results {
-                println!(
-                    "--- {} [{}] ---",
-                    rust_i18n::t!("autotune_domain_results"),
-                    pr.preset_name
-                );
-                let req_count = pr
-                    .domain_checks
-                    .first()
-                    .map(|_| app.autotune_config.num_requests)
-                    .unwrap_or(3);
-                for dc in &pr.domain_checks {
-                    println!(
-                        "  {}: alive={} HTTP:{}({}/{}) TLS1.2={} TLS1.3={} QUIC:{}({}/{}) baseline={}",
-                        dc.domain,
-                        status_str(&dc.alive),
-                        status_str(&dc.http),
-                        dc.http_count,
-                        req_count,
-                        status_str(&dc.tls12),
-                        status_str(&dc.tls13),
-                        status_str(&dc.quic),
-                        dc.quic_count,
-                        req_count,
-                        status_str(if dc.baseline_pass {
-                            &CheckStatus::Pass
-                        } else {
-                            &CheckStatus::Fail
-                        }),
-                    );
-                }
-                if !pr.strategy_results.is_empty() {
-                    println!();
-                    println!("  --- {} ---", rust_i18n::t!("autotune_strat_results"));
-                    for sr in &pr.strategy_results {
-                        let status = if sr.works { "✅ WORKS" } else { "❌ FAILS" };
-                        let protos = if sr.protocols_working.is_empty() {
-                            String::new()
-                        } else {
-                            format!(" [{}]", sr.protocols_working.join(", "))
-                        };
-                        println!(
-                            "    {}: {} ({}/{} blocked domains unblocked){}",
-                            sr.strategy_name,
-                            status,
-                            sr.score(),
-                            sr.total(),
-                            protos
-                        );
-                        for dc in &sr.domain_checks {
-                            println!(
-                                "      {} HTTP:{} T12:{} T13:{} Q:{}",
-                                dc.domain,
-                                if dc.http { "✅" } else { "❌" },
-                                if dc.tls12 { "✅" } else { "❌" },
-                                if dc.tls13 { "✅" } else { "❌" },
-                                if dc.quic { "✅" } else { "❌" },
-                            );
-                        }
-                    }
-                    let working: Vec<&StrategyCheckResult> = pr.strategy_results.iter().filter(|s| s.works).collect();
-                    if working.is_empty() {
-                        println!("    {}", rust_i18n::t!("autotune_strat_none_work"));
-                    } else {
-                        println!(
-                            "    {} {} {}",
-                            rust_i18n::t!("autotune_strat_works_count"),
-                            working.len(),
-                            rust_i18n::t!("autotune_strat_of_total")
-                                .replace("{}", &pr.strategy_results.len().to_string())
-                        );
-                        for s in &working {
-                            println!("      ✅ {} ({}/{})", s.strategy_name, s.score(), s.total());
-                        }
-                    }
-                }
-                println!();
-            }
-
-            if !results.common_strategies.is_empty() {
-                println!(
-                    "--- {} ({}) ---",
-                    rust_i18n::t!("autotune_common_strats"),
-                    results.common_strategies.len()
-                );
-                for name in &results.common_strategies {
-                    println!("  ✅ {}", name);
-                }
-                println!();
-            }
-            println!("{}", rust_i18n::t!("msg_dl_key"));
-
-            wait_for_key(rx)?;
-            end_external_output(&mut terminal, rx)?;
-
-            app.autotune_results = Some(results);
-            app.autotune_running = false;
-            app.status_message = Some(rust_i18n::t!("autotune_done").into_owned());
-            dirty = true;
+            crate::diagnostics::events::end_live();
         }
 
         if app.should_run_ttl {
@@ -1357,17 +1154,19 @@ pub fn run_tui(app: &mut AppState, reader: &EventReader) -> Result<(), io::Error
             let backend: &dyn crate::firewalls::FirewallBackend = &app.selected_backend;
             #[cfg(target_os = "windows")]
             let backend: &dyn crate::firewalls::FirewallBackend = &crate::firewalls::windivert::WinDivertBackend;
+            #[cfg(not(any(target_os = "linux", target_os = "windows")))]
+            let backend: &dyn crate::firewalls::FirewallBackend = &crate::firewalls::UnsupportedBackend;
 
             let result = if strategy.is_empty() {
                 Err(rust_i18n::t!("msg_no_strat").into_owned())
             } else {
-                crate::ttl::autopick_ttl(&strategy, interface, backend)
+                crate::common::ttl::autopick_ttl(&strategy, interface, backend)
             };
 
             println!();
             match &result {
                 Ok(ttl) => {
-                    let _ = crate::config::save_ttl(Some(*ttl));
+                    let _ = crate::common::config::save_ttl(Some(*ttl));
                     println!("{} {}", rust_i18n::t!("ttl_found"), ttl);
                 }
                 Err(e) => {

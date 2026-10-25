@@ -4,7 +4,7 @@ pkgrel=1
 pkgdesc="TUI and CLI controller for zapret and zapret2 DPI bypass (nfqws/winws)"
 arch=('x86_64' 'aarch64')
 url="https://github.com/soufied/zapret-tui-rs"
-license=('MIT')
+license=('GPL-3.0-only')
 depends=(
   'curl'
   'libcap'
@@ -13,6 +13,7 @@ depends=(
   'procps-ng'
 )
 optdepends=(
+  'curl-impersonate: browser-like TLS and HTTP fingerprint for blockcheck probes'
   'iptables: alternative firewall backend'
   'sudo: privilege escalation when polkit is not available'
 )

@@ -1,4 +1,4 @@
-use crate::fakes::FakesState;
+use crate::common::fakes::FakesState;
 use crate::tui::state::{AppState, FakesMenuState, FakesSelectTarget};
 use crate::tui::theme::Theme;
 use ratatui::{

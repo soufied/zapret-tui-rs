@@ -4,6 +4,8 @@ A terminal UI (TUI) and command-line controller for [**zapret**](https://github.
 
 It automates DPI (deep packet inspection) bypass setups for commonly blocked services such as Discord and YouTube. It downloads engine binaries and strategy bundles, sets up firewall rules, and can run as a background service on Linux and Windows.
 
+> **Testing status:** only Linux has been tested. Windows, macOS, FreeBSD, and OpenWrt builds may or may not work.
+
 ---
 
 ## Contents
@@ -41,7 +43,7 @@ It automates DPI (deep packet inspection) bypass setups for commonly blocked ser
 - **Safe teardown**: RAII guards remove redirection rules if launching or running the engine fails.
 - **Hardened Linux staging**: engine binaries and configs are staged in `/run/zapret` (or `/tmp/zapret-runtime`) with restricted permissions. The engine gets `cap_net_admin` through `setcap`, so nothing runs setuid root.
 - **Connectivity diagnostics**: probes targets with hand-crafted QUIC Initial packets and `curl` requests across predefined service bundles.
-- **Autotune**: evaluates strategy effectiveness, builds a service availability matrix, and discovers TTL values.
+- **Autotune**: runs a live block check (progress bar and a per-strategy table), keeps the results on screen until you press Q or Esc, and discovers TTL values.
 - **Service integration**: runs as a background service under systemd, OpenRC, runit, dinit, s6, `init.d`, or procd (OpenWrt), or as a native Windows service.
 - **Router mode**: headless operation on OpenWrt, with a procd init script and preflight checks.
 - **Two ways to use it**: the interactive TUI, or a headless CLI for scripts and automation.
@@ -55,8 +57,8 @@ It automates DPI (deep packet inspection) bypass setups for commonly blocked ser
 | **Linux (glibc or musl)** | `nftables` or `iptables` (`NFQUEUE`) | systemd, OpenRC, runit, dinit, s6, `init.d`, procd (OpenWrt) |
 | **OpenWrt** | `nftables` (default on 22.03+) or `iptables` | procd (`/etc/init.d/zapret-rust`), or router mode (`-R`) |
 | **Windows** | `WinDivert` (`winws` / `winws2`) | Native Windows service |
-
-macOS and FreeBSD binaries can be downloaded, but firewall and service automation are not implemented for them.
+| **macOS** | Not implemented | Not implemented |
+| **FreeBSD** | Not implemented | Not implemented |
 
 ---
 
@@ -84,6 +86,7 @@ The first run downloads the engine and strategies, then opens the menu.
 - Root access through `sudo` or `pkexec` (polkit).
 - A firewall backend: `nftables` (`nft`) or `iptables`.
 - `curl`, used for connectivity checks and downloads.
+- Optional: `curl-impersonate`. Select it in Settings → HTTP client to send a browser's TLS and HTTP fingerprint from the probes. Plain `curl` is the default. Upstream: [lexiforest/curl-impersonate](https://github.com/lexiforest/curl-impersonate).
 - `setcap` (from libcap), to grant `cap_net_admin` to the engine.
 - `pgrep` and `pkill` (from procps).
 
@@ -159,6 +162,14 @@ git clone https://github.com/soufied/zapret-tui-rs.git
 cd zapret-tui-rs/packaging/arch
 makepkg -si
 ```
+
+For blockcheck to use browser-like HTTP and TLS fingerprints, install the optional `curl-impersonate` package:
+
+```bash
+sudo pacman -S curl-impersonate
+```
+
+Then choose it in the TUI under Settings → HTTP client (the default is `curl`). It is used by Blockcheck and Autotune only when selected. To check that the fingerprint is correct, run `curl-impersonate --compressed --impersonate chrome https://tls.browserleaks.com/json`.
 
 The default cache directory is the directory of the executable, which would put downloads and `conf.env` into `/usr/bin`. Keep them elsewhere with `-d`:
 
@@ -377,9 +388,43 @@ sudo ./zapret-rust -d /opt/zapret-rust --config conf.env
 | `-u, --gamefilterudp` | Enable the game filter for UDP |
 | `-d, --cache-dir <DIR>` | Directory for downloaded binaries and strategies |
 | `-R, --router` | Headless router mode (OpenWrt); see below |
+| `--blockcheck` | Rank strategies against the blockcheck domains, then exit; see below |
+| `--bc-engine <NAME>` | Blockcheck engine: `zapret` (default) or `zapret2` |
+| `--bc-strategies <A,B>` | Blockcheck: test only these strategies or presets |
+| `--bc-limit <N>` | Blockcheck: test only the first N strategies |
+| `--bc-per-list <N>` | Blockcheck (zapret2): random hosts per hostlist, 1–20 (default 5) |
+| `--bc-services <A,B>` | Blockcheck (zapret only): service keys such as `yt,ds` |
 | `-h, --help` | Show help |
 
 Running with `-s` or `--config` skips the TUI and runs in the foreground. Press `Ctrl+C` to stop it.
+
+### Blockcheck
+
+Blockcheck can also be run from the TUI: open Autotune and choose **Block check**. While it runs, the screen shows a progress bar and a live table with one row per strategy (rating, domains, HTTP, TLS 1.2, TLS 1.3, QUIC, average latency). Press `q` or Esc to cancel. The full ranking is printed when the run ends.
+
+Blockcheck tests each strategy the way zapret-ksu's blockcheck does, and prints a ranking:
+
+```bash
+sudo zapret-rust --blockcheck
+sudo zapret-rust --blockcheck --bc-limit 10
+sudo zapret-rust --blockcheck --bc-engine zapret2 --bc-strategies preset.txt
+```
+
+The run works in three steps:
+
+1. It measures the domains with no bypass, to get a baseline. The engine must be stopped first.
+2. It starts the engine once per strategy and measures the same domains.
+3. It writes `results.txt` and `blockcheck.log` to the `blockcheck` folder in the cache directory.
+
+Each domain gets up to four probes: plain HTTP, TLS 1.2, TLS 1.3, and HTTP/3 (QUIC). A domain counts as available when any probe succeeds. The client is the one chosen under Settings → HTTP client: `curl` (default) or `curl-impersonate`. QUIC is tested only when the selected client supports HTTP/3.
+
+Addresses are resolved through DNS-over-HTTPS (Cloudflare, then Google), and each probe is pinned to that address. A local resolver such as AdGuard, set as the system DNS, therefore does not change the results. A DNS answer of `0.0.0.0`, `127.x` or a private address is treated as a sinkhole and ignored. If no usable address is found, the domain is reported as blocked, not skipped.
+
+Ratings: zapret 1 strategies are rated by the share of successful probes. zapret 2 presets are rated by a Wilson lower bound over the available domains, so a preset that works on more hosts ranks higher.
+
+The domains come from `blockcheck/domains.txt` in the cache directory. It is created with defaults on the first run. zapret 2 presets are tested on the hosts they name, with a random sample from each hostlist.
+
+Blockcheck does not change the TUI and does not manage encrypted DNS (DoH/DoT). Those parts of zapret-ksu are not ported.
 
 ### Router mode
 
@@ -410,6 +455,7 @@ active_gamefilter_fake=quic_initial_4pda_to.bin
 dpi_desync_ttl=
 editor=
 backup_lists=true
+http_client=curl
 ```
 
 | Key | Description |
@@ -423,6 +469,7 @@ backup_lists=true
 | `dpi_desync_ttl` | TTL override for desync packets (empty for the strategy default) |
 | `editor` | Editor command used to open strategy files |
 | `backup_lists` | Whether list files are backed up (`true` / `false`) |
+| `http_client` | HTTP client for Blockcheck and Autotune: `curl` (default) or `curl-impersonate` |
 
 ---
 
@@ -473,21 +520,32 @@ Firewall rules are removed when the service stops. If rules are left over after 
 
 ```
 src/
-├── main.rs         Entry point and CLI
-├── config.rs       conf.env parsing and engine selection
-├── download.rs     Binary and strategy downloads
-├── runner.rs       Process lifecycle
-├── router.rs       Router mode (OpenWrt) checks and defaults
-├── strategy/       Strategy discovery and parsing
-├── autotune/       Probing, scoring, and TTL discovery
-├── firewalls/      nftables, iptables, and WinDivert backends
-├── inits/          Service integration per init system (including procd)
-├── platform/       Linux and Windows specifics
-└── tui/            ratatui interface and menus
-locales/            English and Russian translations
+├── main.rs             Entry point and CLI
+├── common/             Shared: conf.env, logging, downloads, helpers
+│   ├── config.rs       conf.env parsing and engine selection
+│   ├── download.rs     Binary and strategy downloads
+│   └── ...
+├── engine/             Running the engine
+│   ├── runner.rs       Process lifecycle
+│   ├── staging.rs      Runtime copies of binaries and lists
+│   └── router.rs       Router mode (OpenWrt) checks and defaults
+├── diagnostics/        Finding what works on this network
+│   ├── autotune/       TUI-driven search: probing, scoring, TTL discovery
+│   ├── blockcheck/     Strategy ranking against a domain list
+│   ├── dns.rs          Name resolution that ignores local sinkholes
+│   └── http_client.rs  curl vs curl-impersonate selection
+├── strategy/           Strategy discovery and parsing
+├── firewalls/          nftables, iptables, and WinDivert backends
+├── inits/              Service integration per init system (including procd)
+├── platform/           Linux and Windows specifics
+└── tui/                ratatui interface and menus (live.rs draws runs in progress)
+assets/locales/     English and Russian translations (rust-i18n)
+assets/app.ico      Windows icon (optional)
 packaging/arch/     Arch Linux PKGBUILD
-nix/                Nix package and NixOS module
-flake.nix           Nix flake (package, dev shell, overlay, module)
+packaging/nix/      Nix package and NixOS module
+packaging/windows/  Windows application manifest
+docs/               Design notes
+flake.nix           Nix flake entry point (must stay at the repository root)
 ```
 
 ---
@@ -495,6 +553,10 @@ flake.nix           Nix flake (package, dev shell, overlay, module)
 ## Troubleshooting
 
 - **"Binary or strategies missing"**: open the download menu in the TUI to fetch them. Check your network connection, or point `-d` at a directory that already contains them.
+- **Blockcheck or Autotune shows only zeros**: check the log in the cache directory (`blockcheck/blockcheck.log`, `zapret.log`). Two common causes:
+  - The selected client could not be used. With `curl-impersonate` selected, the run stops with the reason if the binary is missing or no browser profile reaches the reference site. Install it, or switch to `curl` in Settings.
+  - Domains did not resolve. Lines starting `dns:` show what the system resolver returned, for example a sinkhole from AdGuard. Probes are pinned to addresses from DNS-over-HTTPS, so this should not affect results, but the log shows it. If DoH is blocked on your network, the system resolver is used and its sinkhole answers are dropped.
+- To force impersonation off for one session even when it is selected, start the program with `ZAPRET_NO_IMPERSONATE=1` set.
 - **Rules not applied**: confirm the firewall backend is installed (`nft --version` or `iptables --version`) and that you are running as root.
 - **Bypass has no effect on a router**: check that flow offloading is disabled (see [OpenWrt](#openwrt-router-mode)).
 - **Service fails to start**: check the Log menu in the TUI. On systemd systems, `journalctl -u zapret-rust` (or `zapret2-rust` for the zapret2 engine) may help.
@@ -511,4 +573,14 @@ flake.nix           Nix flake (package, dev shell, overlay, module)
 
 ## License
 
-MIT
+This project is licensed under the [GNU General Public License v3.0 only](LICENSE) (GPL-3.0-only).
+
+In short, you are free to use, study, modify, and redistribute this software. If you distribute it, or a modified version of it, you must:
+
+- Make the complete corresponding source code available under the same license.
+- Keep the copyright and license notices intact.
+- Clearly mark any changes you made.
+
+The software comes with no warranty. See the [LICENSE](LICENSE) file for the full terms.
+
+The upstream zapret, zapret2, and strategy projects listed in [Credits](#credits) are separate works and keep their own licenses.

@@ -28,7 +28,6 @@ pub enum ActiveScreen {
     AutotuneZ2PresetsSubmenu,
     AutotuneZ2TargetsSubmenu,
     AutotuneResultsSubmenu,
-    AutotuneServiceMatrixSubmenu,
     SettingsSubmenu,
     SettingsEditorSubmenu,
     LogViewer,
@@ -118,7 +117,7 @@ impl MainMenuState {
         }
     }
 
-    pub fn is_visible_for(self, engine: &crate::config::ZapretEngine) -> bool {
+    pub fn is_visible_for(self, engine: &crate::common::config::ZapretEngine) -> bool {
         if self == Self::GamefilterSettings && !engine.supports_game_filter() {
             return false;
         }
@@ -131,7 +130,7 @@ impl MainMenuState {
         true
     }
 
-    pub fn next_visible(self, engine: &crate::config::ZapretEngine) -> Self {
+    pub fn next_visible(self, engine: &crate::common::config::ZapretEngine) -> Self {
         let mut candidate = self.next();
         while !candidate.is_visible_for(engine) {
             candidate = candidate.next();
@@ -139,7 +138,7 @@ impl MainMenuState {
         candidate
     }
 
-    pub fn prev_visible(self, engine: &crate::config::ZapretEngine) -> Self {
+    pub fn prev_visible(self, engine: &crate::common::config::ZapretEngine) -> Self {
         let mut candidate = self.prev();
         while !candidate.is_visible_for(engine) {
             candidate = candidate.prev();
@@ -242,29 +241,32 @@ impl DefenderMenuState {
 pub enum SettingsMenuState {
     Editor,
     BackupLists,
+    HttpClient,
     ViewLogs,
     Back,
 }
 
 impl SettingsMenuState {
     pub fn all() -> &'static [Self] {
-        &[Self::Editor, Self::BackupLists, Self::ViewLogs, Self::Back]
+        &[Self::Editor, Self::BackupLists, Self::HttpClient, Self::ViewLogs, Self::Back]
     }
 
     pub fn index(self) -> usize {
         match self {
             Self::Editor => 0,
             Self::BackupLists => 1,
-            Self::ViewLogs => 2,
-            Self::Back => 3,
+            Self::HttpClient => 2,
+            Self::ViewLogs => 3,
+            Self::Back => 4,
         }
     }
 
     pub fn from_index(index: usize) -> Self {
         match index {
             1 => Self::BackupLists,
-            2 => Self::ViewLogs,
-            3 => Self::Back,
+            2 => Self::HttpClient,
+            3 => Self::ViewLogs,
+            4 => Self::Back,
             _ => Self::Editor,
         }
     }
@@ -305,9 +307,8 @@ pub enum AutotuneMenuState {
     Protocols,
     BlockChecks,
     EditDomains,
-    ServiceMatrix,
     Results,
-    Run,
+    Blockcheck,
     Back,
 }
 
@@ -477,14 +478,14 @@ impl VersionTarget {
 }
 
 pub struct AppState {
-    pub engine: crate::config::ZapretEngine,
+    pub engine: crate::common::config::ZapretEngine,
     pub interfaces: Vec<String>,
     pub selected_interface: usize,
 
     #[cfg(target_os = "linux")]
     pub selected_backend: LinuxBackend,
 
-    pub available_ipset_modes: Vec<crate::ipset::IpsetMode>,
+    pub available_ipset_modes: Vec<crate::common::ipset::IpsetMode>,
     pub selected_ipset_mode: usize,
 
     pub strategies: Vec<String>,
@@ -506,7 +507,7 @@ pub struct AppState {
     pub download_zapret_menu: DownloadSubmenuState,
     pub download_strategies_menu: DownloadSubmenuState,
     pub gamefilter_menu: GamefilterMenuState,
-    pub fakes_state: crate::fakes::FakesState,
+    pub fakes_state: crate::common::fakes::FakesState,
     pub fakes_menu: FakesMenuState,
     pub fakes_select_index: usize,
     pub fakes_select_for: FakesSelectTarget,
@@ -538,6 +539,7 @@ pub struct AppState {
     pub pending_service_action: Option<PendingServiceAction>,
 
     pub lists_files: Vec<String>,
+    pub lists_inspection: Option<crate::tui::menus::lists_menu::ListInspection>,
     pub lists_menu_index: usize,
     pub should_open_editor: Option<String>,
     pub domain_files: Vec<(String, String)>,
@@ -552,8 +554,7 @@ pub struct AppState {
     pub strategy_editor_clone_source: Option<crate::tui::menus::strategy_editor_menu::StrategyFileEntry>,
     pub strategy_editor_delete_confirm: bool,
 
-    pub autotune_config: crate::autotune::AutotuneConfig,
-    pub autotune_results: Option<crate::autotune::AutotuneResults>,
+    pub autotune_config: crate::diagnostics::autotune::AutotuneConfig,
     pub has_autotune_results_file: bool,
     pub autotune_menu: AutotuneMenuState,
     pub autotune_menu_index: usize,
@@ -567,16 +568,10 @@ pub struct AppState {
     pub z2_selected_lists: Vec<usize>,
     pub z2_list_index: usize,
     pub z2_targets: Vec<String>,
-    pub z2_bundle: crate::autotune::TargetBundle,
+    pub z2_bundle: crate::diagnostics::autotune::TargetBundle,
     pub autotune_strat_index: usize,
     pub autotune_results_index: usize,
-    pub service_matrix_rows: Vec<crate::autotune::MatrixRow>,
-    pub service_matrix_reports: Vec<crate::autotune::ServiceReport>,
-    pub service_matrix_index: usize,
-    pub service_matrix_elapsed_ms: u128,
-    pub should_run_service_matrix: bool,
-    pub should_run_autotune: bool,
-    pub autotune_running: bool,
+    pub should_run_blockcheck: bool,
     pub autotune_request_editing: bool,
     pub autotune_request_buf: String,
     pub should_run_ttl: bool,
@@ -588,6 +583,7 @@ pub struct AppState {
     pub editor_custom_editing: bool,
     pub editor_custom_buf: String,
     pub backup_lists: bool,
+    pub http_client: crate::diagnostics::http_client::HttpClientKind,
     pub log_lines: Vec<String>,
     pub log_scroll: usize,
     pub dpi_running: bool,
@@ -599,13 +595,13 @@ impl AppState {
     }
 
     pub fn new(interfaces: Vec<String>, strategies: Vec<String>) -> Self {
-        let _ = crate::config::ensure_default_config();
-        let _ = crate::autotune::ensure_domain_files();
+        let _ = crate::common::config::ensure_default_config();
+        let _ = crate::diagnostics::autotune::ensure_domain_files();
 
         let domain_files: Vec<(String, String)> = {
             let mut files: Vec<(String, String)> = Vec::new();
-            for (idx, preset) in crate::autotune::PRESETS.iter().enumerate() {
-                let is_custom = idx == crate::autotune::PRESETS.len() - 1;
+            for (idx, preset) in crate::diagnostics::autotune::PRESETS.iter().enumerate() {
+                let is_custom = idx == crate::diagnostics::autotune::PRESETS.len() - 1;
                 let label = if is_custom {
                     rust_i18n::t!("menu_domain_custom").into_owned()
                 } else {
@@ -613,24 +609,24 @@ impl AppState {
                 };
                 files.push((
                     label,
-                    crate::autotune::preset_domains_file_path(idx)
+                    crate::diagnostics::autotune::preset_domains_file_path(idx)
                         .to_string_lossy()
                         .into_owned(),
                 ));
             }
             files.push((
                 rust_i18n::t!("menu_domain_ttl").into_owned(),
-                crate::ttl::ttl_domains_file_path().to_string_lossy().into_owned(),
+                crate::common::ttl::ttl_domains_file_path().to_string_lossy().into_owned(),
             ));
             files
         };
 
-        let saved_cfg = crate::config::load_config(&crate::config::config_path().to_string_lossy()).ok();
+        let saved_cfg = crate::common::config::load_config(&crate::common::config::config_path().to_string_lossy()).ok();
         let engine = saved_cfg
             .as_ref()
-            .map_or(crate::config::ZapretEngine::Zapret1, |cfg| cfg.engine.clone());
+            .map_or(crate::common::config::ZapretEngine::Zapret1, |cfg| cfg.engine.clone());
         std::env::set_var("REPO_DIR", engine.workspace_dir());
-        crate::runner::set_engine(engine.clone());
+        crate::engine::runner::set_engine(engine.clone());
         let strategies = if strategies.is_empty() || engine.uses_presets() {
             crate::strategy::get_strategies_for(&engine)
         } else {
@@ -652,8 +648,8 @@ impl AppState {
             |cfg| LinuxBackend::from_config(&cfg.backend),
         );
 
-        let available_ipset_modes = crate::ipset::get_available_modes_for(&engine);
-        let current_ipset_mode = crate::ipset::determine_current_mode();
+        let available_ipset_modes = crate::common::ipset::get_available_modes_for(&engine);
+        let current_ipset_mode = crate::common::ipset::determine_current_mode();
         let selected_ipset_mode = available_ipset_modes
             .iter()
             .position(|m| m == &current_ipset_mode)
@@ -683,13 +679,13 @@ impl AppState {
             #[cfg(target_os = "windows")]
             defender_menu: DefenderMenuState::Add,
             #[cfg(target_os = "windows")]
-            defender_status_cache: crate::defender::check_defender_exclusion().ok(),
+            defender_status_cache: crate::common::defender::check_defender_exclusion().ok(),
 
             download_deps_menu: DownloadDepsMenuState::ZapretDownloader,
             download_zapret_menu: DownloadSubmenuState::Version,
             download_strategies_menu: DownloadSubmenuState::Version,
             gamefilter_menu: GamefilterMenuState::Tcp,
-            fakes_state: crate::fakes::load_fakes_state(),
+            fakes_state: crate::common::fakes::load_fakes_state(),
             fakes_menu: FakesMenuState::DiscordUdp,
             fakes_select_index: 0,
             fakes_select_for: FakesSelectTarget::DiscordUdp,
@@ -710,8 +706,8 @@ impl AppState {
             should_download_defaults: false,
             status_message: None,
 
-            nfqws_installed: crate::download::check_nfqws_installed_for(&engine_for_checks),
-            strategies_installed: crate::download::check_strategies_installed_for(&engine_for_checks),
+            nfqws_installed: crate::common::download::check_nfqws_installed_for(&engine_for_checks),
+            strategies_installed: crate::common::download::check_strategies_installed_for(&engine_for_checks),
 
             service_installed: false,
             service_active: false,
@@ -721,6 +717,7 @@ impl AppState {
             pending_service_action: None,
 
             lists_files: Vec::new(),
+            lists_inspection: None,
             lists_menu_index: 0,
             should_open_editor: None,
             domain_files,
@@ -735,9 +732,8 @@ impl AppState {
             strategy_editor_clone_source: None,
             strategy_editor_delete_confirm: false,
 
-            autotune_config: crate::autotune::AutotuneConfig::default(),
-            autotune_results: None,
-            has_autotune_results_file: crate::autotune::load_results_file().is_some(),
+            autotune_config: crate::diagnostics::autotune::AutotuneConfig::default(),
+            has_autotune_results_file: crate::diagnostics::autotune::load_results_file().is_some(),
             autotune_menu: AutotuneMenuState::PresetSelection,
             autotune_menu_index: 0,
             autotune_protocols_menu: AutotuneProtocolsState::Http,
@@ -750,27 +746,22 @@ impl AppState {
             z2_selected_lists: Vec::new(),
             z2_list_index: 0,
             z2_targets: Vec::new(),
-            z2_bundle: crate::autotune::TargetBundle::default(),
+            z2_bundle: crate::diagnostics::autotune::TargetBundle::default(),
             autotune_strat_index: 0,
             autotune_results_index: 0,
-            service_matrix_rows: Vec::new(),
-            service_matrix_reports: Vec::new(),
-            service_matrix_index: 0,
-            service_matrix_elapsed_ms: 0,
-            should_run_service_matrix: false,
-            should_run_autotune: false,
-            autotune_running: false,
+            should_run_blockcheck: false,
             autotune_request_editing: false,
             autotune_request_buf: String::new(),
             should_run_ttl: false,
-            dpi_desync_ttl: crate::config::load_ttl(),
+            dpi_desync_ttl: crate::common::config::load_ttl(),
 
             settings_menu: SettingsMenuState::Editor,
             editor_entries: Vec::new(),
             editor_index: 0,
             editor_custom_editing: false,
             editor_custom_buf: String::new(),
-            backup_lists: crate::config::load_backup_lists(),
+            backup_lists: crate::common::config::load_backup_lists(),
+            http_client: crate::diagnostics::http_client::selected(),
             log_lines: Vec::new(),
             log_scroll: 0,
             dpi_running: false,
@@ -798,22 +789,22 @@ impl AppState {
     }
 
     pub fn refresh_editors(&mut self) {
-        let configured = crate::config::load_editor();
+        let configured = crate::common::config::load_editor();
         let mut entries: Vec<EditorEntry> = Vec::new();
 
         entries.push(EditorEntry {
             kind: EditorKind::Auto,
             command: String::new(),
             label: rust_i18n::t!("settings_editor_auto_label").into_owned(),
-            installed: crate::utils::resolve_editor().is_some(),
+            installed: crate::common::utils::resolve_editor().is_some(),
         });
 
-        for candidate in crate::utils::EDITOR_CANDIDATES {
+        for candidate in crate::common::utils::EDITOR_CANDIDATES {
             entries.push(EditorEntry {
                 kind: EditorKind::Binary,
                 command: candidate.command.to_string(),
                 label: candidate.label.to_string(),
-                installed: crate::utils::editor_is_installed(candidate.command),
+                installed: crate::common::utils::editor_is_installed(candidate.command),
             });
         }
 
@@ -828,7 +819,7 @@ impl AppState {
         let custom_installed = custom_value
             .split_whitespace()
             .next()
-            .map(crate::utils::editor_is_installed)
+            .map(crate::common::utils::editor_is_installed)
             .unwrap_or(false);
 
         entries.push(EditorEntry {
@@ -862,12 +853,12 @@ impl AppState {
 
         match entry.kind {
             EditorKind::Auto => {
-                let _ = crate::config::save_editor("");
+                let _ = crate::common::config::save_editor("");
                 self.refresh_editors();
                 self.status_message = Some(format!(
                     "{} {}",
                     rust_i18n::t!("settings_editor_saved"),
-                    crate::utils::active_editor_label()
+                    crate::common::utils::active_editor_label()
                 ));
             }
             EditorKind::Binary => {
@@ -875,7 +866,7 @@ impl AppState {
                     self.show_error(format!("{} {}", rust_i18n::t!("settings_editor_missing"), entry.command));
                     return;
                 }
-                let _ = crate::config::save_editor(&entry.command);
+                let _ = crate::common::config::save_editor(&entry.command);
                 self.refresh_editors();
                 self.status_message = Some(format!(
                     "{} {}",
@@ -897,17 +888,17 @@ impl AppState {
         self.editor_custom_buf.clear();
 
         if value.is_empty() {
-            let _ = crate::config::save_editor("");
+            let _ = crate::common::config::save_editor("");
             self.refresh_editors();
             self.status_message = Some(rust_i18n::t!("settings_editor_cleared").into_owned());
             return;
         }
 
         let program = value.split_whitespace().next().unwrap_or("").to_string();
-        let _ = crate::config::save_editor(&value);
+        let _ = crate::common::config::save_editor(&value);
         self.refresh_editors();
 
-        if crate::utils::editor_is_installed(&program) {
+        if crate::common::utils::editor_is_installed(&program) {
             self.status_message = Some(format!("{} {}", rust_i18n::t!("settings_editor_saved"), value));
         } else {
             self.show_error(format!("{} {}", rust_i18n::t!("settings_editor_missing"), program));
@@ -916,12 +907,17 @@ impl AppState {
 
     pub fn toggle_backup_lists(&mut self) {
         self.backup_lists = !self.backup_lists;
-        let _ = crate::config::save_backup_lists(self.backup_lists);
+        let _ = crate::common::config::save_backup_lists(self.backup_lists);
+    }
+
+    pub fn toggle_http_client(&mut self) {
+        self.http_client = self.http_client.toggle();
+        let _ = crate::common::config::save_http_client(self.http_client.as_config());
     }
 
     pub fn load_logs(&mut self) {
-        let path = crate::config::get_cache_dir().join("logs").join("zapret.log");
-        self.log_lines = crate::utils::read_log_tail(&path, 800);
+        let path = crate::common::config::get_cache_dir().join("logs").join("zapret.log");
+        self.log_lines = crate::common::utils::read_log_tail(&path, 800);
         if self.log_lines.is_empty() {
             self.log_lines
                 .push(rust_i18n::t!("settings_logs_empty").into_owned());
@@ -930,23 +926,22 @@ impl AppState {
     }
 
     pub fn refresh_dep_status(&mut self) {
-        self.nfqws_installed = crate::download::check_nfqws_installed_for(&self.engine);
-        self.strategies_installed = crate::download::check_strategies_installed_for(&self.engine);
+        self.nfqws_installed = crate::common::download::check_nfqws_installed_for(&self.engine);
+        self.strategies_installed = crate::common::download::check_strategies_installed_for(&self.engine);
     }
 
     pub fn switch_engine(&mut self) {
         self.engine = match self.engine {
-            crate::config::ZapretEngine::Zapret1 => crate::config::ZapretEngine::Zapret2,
-            crate::config::ZapretEngine::Zapret2 => crate::config::ZapretEngine::Zapret1,
+            crate::common::config::ZapretEngine::Zapret1 => crate::common::config::ZapretEngine::Zapret2,
+            crate::common::config::ZapretEngine::Zapret2 => crate::common::config::ZapretEngine::Zapret1,
         };
         std::env::set_var("REPO_DIR", self.engine.workspace_dir());
-        crate::runner::set_engine(self.engine.clone());
+        crate::engine::runner::set_engine(self.engine.clone());
         self.strategies = crate::strategy::get_strategies_for(&self.engine);
         self.selected_strategy = 0;
         self.strategy_menu_index = 0;
         self.autotune_config.strategy_indices.clear();
         self.autotune_strat_index = 0;
-        self.autotune_results = None;
         self.set_autotune_menu_index(0);
         self.reload_z2_lists();
         self.save_current_config();
@@ -968,6 +963,37 @@ impl AppState {
         self.strategies = crate::strategy::get_strategies_for(&self.engine);
         self.selected_strategy = self.strategies.iter().position(|s| *s == current).unwrap_or(0);
         self.strategy_menu_index = self.selected_strategy;
+    }
+
+    pub fn blockcheck_names(&self) -> Vec<String> {
+        match self.engine {
+            crate::common::config::ZapretEngine::Zapret2 => self
+                .z2_selected_presets
+                .iter()
+                .filter_map(|&i| self.z2_presets.get(i).cloned())
+                .collect(),
+            crate::common::config::ZapretEngine::Zapret1 => self
+                .autotune_config
+                .strategy_indices
+                .iter()
+                .filter_map(|&i| self.strategies.get(i).cloned())
+                .collect(),
+        }
+    }
+
+    pub fn blockcheck_domains(&self) -> Vec<String> {
+        if self.engine != crate::common::config::ZapretEngine::Zapret1 {
+            return Vec::new();
+        }
+        let mut out: Vec<String> = Vec::new();
+        for &idx in &self.autotune_config.preset_indices {
+            for domain in crate::diagnostics::autotune::get_domains_for_preset(idx) {
+                if !out.contains(&domain) {
+                    out.push(domain);
+                }
+            }
+        }
+        out
     }
 
     pub fn reload_z2_presets(&mut self) {
@@ -1172,7 +1198,7 @@ impl AppState {
             .filter_map(|&i| self.z2_lists.get(i).cloned())
             .collect();
 
-        self.z2_lists = crate::autotune::available_lists();
+        self.z2_lists = crate::diagnostics::autotune::available_lists();
         self.z2_selected_lists = self
             .z2_lists
             .iter()
@@ -1205,7 +1231,7 @@ impl AppState {
         self.z2_targets = if lists.is_empty() {
             Vec::new()
         } else {
-            crate::autotune::domains_from_lists(&lists, crate::autotune::Z2_MAX_TARGETS)
+            crate::diagnostics::autotune::domains_from_lists(&lists, crate::diagnostics::autotune::Z2_MAX_TARGETS)
         };
     }
 
@@ -1229,22 +1255,6 @@ impl AppState {
         format!("{} {}", resolved.len(), rust_i18n::t!("autotune_z2_lists_suffix"))
     }
 
-    pub fn z2_selected_preset_names(&self) -> Vec<String> {
-        self.z2_selected_presets
-            .iter()
-            .filter_map(|&i| self.z2_presets.get(i).cloned())
-            .collect()
-    }
-
-    pub fn z2_config(&self) -> crate::autotune::Z2Config {
-        crate::autotune::Z2Config {
-            presets: self.z2_selected_preset_names(),
-            targets: self.z2_targets.clone(),
-            bundle: self.z2_bundle,
-            lists: self.resolved_z2_lists(),
-        }
-    }
-
     pub fn z2_planned_counts(&self) -> (usize, usize) {
         let presets = if self.z2_selected_presets.is_empty() {
             if self.z2_presets.is_empty() {
@@ -1257,7 +1267,7 @@ impl AppState {
         };
 
         let targets = if self.z2_targets.is_empty() {
-            crate::autotune::Z2_TARGETS.len()
+            crate::diagnostics::autotune::Z2_TARGETS.len()
         } else {
             self.z2_targets.len()
         };
@@ -1267,7 +1277,7 @@ impl AppState {
 
     #[cfg(target_os = "windows")]
     pub fn refresh_defender_status(&mut self) {
-        self.defender_status_cache = crate::defender::check_defender_exclusion().ok();
+        self.defender_status_cache = crate::common::defender::check_defender_exclusion().ok();
     }
 
     pub fn refresh_service_status(&mut self) {
@@ -1302,9 +1312,16 @@ impl AppState {
         }
     }
 
+    pub fn refresh_lists_inspection(&mut self) {
+        self.lists_inspection = self
+            .lists_files
+            .get(self.lists_menu_index)
+            .map(|path| crate::tui::menus::lists_menu::inspect_list(std::path::Path::new(path)));
+    }
+
     pub fn refresh_ipset_status(&mut self) {
-        self.available_ipset_modes = crate::ipset::get_available_modes_for(&self.engine);
-        let current_ipset_mode = crate::ipset::determine_current_mode();
+        self.available_ipset_modes = crate::common::ipset::get_available_modes_for(&self.engine);
+        let current_ipset_mode = crate::common::ipset::determine_current_mode();
         self.selected_ipset_mode = self
             .available_ipset_modes
             .iter()
@@ -1327,7 +1344,7 @@ impl AppState {
         let backend = self.selected_backend.to_config();
         #[cfg(not(target_os = "linux"))]
         let backend = "nftables";
-        let _ = crate::config::save_tui_state(
+        let _ = crate::common::config::save_tui_state(
             &self.engine,
             interface,
             strategy,
@@ -1398,8 +1415,8 @@ impl AppState {
         let res = match action {
             PendingServiceAction::Install => match std::env::current_exe() {
                 Ok(exe) => {
-                    let config_path = crate::config::config_path();
-                    let cache_dir = crate::config::get_cache_dir();
+                    let config_path = crate::common::config::config_path();
+                    let cache_dir = crate::common::config::get_cache_dir();
                     mgr.install(&exe, &config_path, &cache_dir).and_then(|_| mgr.start())
                 }
                 Err(e) => Err(e.to_string()),
@@ -1542,6 +1559,7 @@ impl AppState {
             ActiveScreen::ListsEditorSubmenu => {
                 let max = self.lists_files.len() + 1;
                 self.lists_menu_index = Self::cycle_index(self.lists_menu_index, max, forward);
+                self.refresh_lists_inspection();
             }
             ActiveScreen::StrategyEditorSubmenu => {
                 let max = self.strategy_editor_files.len() + 1;
@@ -1564,7 +1582,7 @@ impl AppState {
                 };
             }
             ActiveScreen::AutotunePresetSelectionSubmenu => {
-                let total = crate::autotune::PRESETS.len() + 1;
+                let total = crate::diagnostics::autotune::PRESETS.len() + 1;
                 if total > 0 {
                     self.autotune_preset_index = Self::cycle_index(self.autotune_preset_index, total, forward);
                 }
@@ -1599,18 +1617,6 @@ impl AppState {
                         }
                     } else if self.autotune_results_index > 0 {
                         self.autotune_results_index -= 1;
-                    }
-                }
-            }
-            ActiveScreen::AutotuneServiceMatrixSubmenu => {
-                let total = self.count_service_matrix_items();
-                if total > 0 {
-                    if forward {
-                        if self.service_matrix_index + 1 < total {
-                            self.service_matrix_index += 1;
-                        }
-                    } else if self.service_matrix_index > 0 {
-                        self.service_matrix_index -= 1;
                     }
                 }
             }
@@ -1657,9 +1663,8 @@ impl AppState {
                 AutotuneMenuState::Z2Bundle,
                 AutotuneMenuState::Z2Targets,
                 AutotuneMenuState::Z2Presets,
-                AutotuneMenuState::ServiceMatrix,
                 AutotuneMenuState::Results,
-                AutotuneMenuState::Run,
+                AutotuneMenuState::Blockcheck,
                 AutotuneMenuState::Back,
             ]
         } else {
@@ -1670,9 +1675,8 @@ impl AppState {
                 AutotuneMenuState::Protocols,
                 AutotuneMenuState::BlockChecks,
                 AutotuneMenuState::EditDomains,
-                AutotuneMenuState::ServiceMatrix,
                 AutotuneMenuState::Results,
-                AutotuneMenuState::Run,
+                AutotuneMenuState::Blockcheck,
                 AutotuneMenuState::Back,
             ]
         }
@@ -1730,8 +1734,8 @@ impl AppState {
                         let old_mode = self.available_ipset_modes[self.selected_ipset_mode];
                         self.selected_ipset_mode = (self.selected_ipset_mode + 1) % self.available_ipset_modes.len();
                         let new_mode = self.available_ipset_modes[self.selected_ipset_mode];
-                        crate::ipset::apply_ipset_mode(old_mode, new_mode);
-                        self.available_ipset_modes = crate::ipset::get_available_modes_for(&self.engine);
+                        crate::common::ipset::apply_ipset_mode(old_mode, new_mode);
+                        self.available_ipset_modes = crate::common::ipset::get_available_modes_for(&self.engine);
                         self.selected_ipset_mode = self
                             .available_ipset_modes
                             .iter()
@@ -1760,11 +1764,12 @@ impl AppState {
                     self.status_message = None;
                 }
                 MainMenuState::ListsEditor => {
-                    if !crate::download::check_strategies_installed_for(&self.engine) {
+                    if !crate::common::download::check_strategies_installed_for(&self.engine) {
                         self.show_error(rust_i18n::t!("err_no_strats").into_owned());
                     } else {
-                        self.lists_files = crate::utils::get_lists_files();
+                        self.lists_files = crate::common::utils::get_lists_files();
                         self.lists_menu_index = 0;
+                        self.refresh_lists_inspection();
                         self.active_screen = ActiveScreen::ListsEditorSubmenu;
                         self.status_message = None;
                     }
@@ -1779,18 +1784,18 @@ impl AppState {
                 MainMenuState::Autotune => {
                     self.active_screen = ActiveScreen::AutotuneSubmenu;
                     self.set_autotune_menu_index(0);
-                    self.has_autotune_results_file = crate::autotune::load_results_file().is_some();
+                    self.has_autotune_results_file = crate::diagnostics::autotune::load_results_file().is_some();
                     self.status_message = None;
                 }
                 MainMenuState::FakesSettings => {
-                    self.fakes_state = crate::fakes::load_fakes_state();
+                    self.fakes_state = crate::common::fakes::load_fakes_state();
                     self.active_screen = ActiveScreen::FakesSubmenu;
                     self.fakes_menu = FakesMenuState::DiscordUdp;
                     self.status_message = None;
                 }
                 MainMenuState::Settings => {
                     self.refresh_editors();
-                    self.backup_lists = crate::config::load_backup_lists();
+                    self.backup_lists = crate::common::config::load_backup_lists();
                     self.settings_menu = SettingsMenuState::Editor;
                     self.active_screen = ActiveScreen::SettingsSubmenu;
                     self.status_message = None;
@@ -1809,14 +1814,14 @@ impl AppState {
             },
             #[cfg(target_os = "windows")]
             ActiveScreen::DefenderSubmenu => match self.defender_menu {
-                DefenderMenuState::Add => match crate::defender::add_defender_exclusion() {
+                DefenderMenuState::Add => match crate::common::defender::add_defender_exclusion() {
                     Ok(_) => {
                         self.status_message = Some(rust_i18n::t!("msg_def_add_ok").into_owned());
                         self.refresh_defender_status();
                     }
                     Err(e) => self.status_message = Some(format!("{}{}", rust_i18n::t!("msg_err"), e)),
                 },
-                DefenderMenuState::Remove => match crate::defender::remove_defender_exclusion() {
+                DefenderMenuState::Remove => match crate::common::defender::remove_defender_exclusion() {
                     Ok(_) => {
                         self.status_message = Some(rust_i18n::t!("msg_def_rm_ok").into_owned());
                         self.refresh_defender_status();
@@ -1874,7 +1879,7 @@ impl AppState {
                 }
                 DownloadSubmenuState::SelectTag => {
                     self.status_message = Some(rust_i18n::t!("msg_fetch_zapret_tags").into_owned());
-                    match crate::download::fetch_repo_tags("bol-van/zapret") {
+                    match crate::common::download::fetch_repo_tags("bol-van/zapret") {
                         Ok(tags) => {
                             self.available_nfqws_tags = tags;
                             self.nfqws_tag_index = 0;
@@ -1900,7 +1905,7 @@ impl AppState {
                 }
                 DownloadSubmenuState::SelectTag => {
                     self.status_message = Some(rust_i18n::t!("msg_fetch_strat_tags").into_owned());
-                    match crate::download::fetch_repo_tags("Flowseal/zapret-discord-youtube") {
+                    match crate::common::download::fetch_repo_tags("Flowseal/zapret-discord-youtube") {
                         Ok(tags) => {
                             self.available_strat_tags = tags;
                             self.strat_tag_index = 0;
@@ -1979,13 +1984,13 @@ impl AppState {
                 if self.fakes_select_index >= 1 && self.fakes_select_index <= file_count {
                     let source_idx = self.fakes_select_index - 1;
                     let source = self.fakes_state.available[source_idx].clone();
-                    let target: crate::fakes::FakeTarget = match self.fakes_select_for {
-                        FakesSelectTarget::DiscordUdp => crate::fakes::FakeTarget::DiscordUdp,
-                        FakesSelectTarget::GameUdp => crate::fakes::FakeTarget::GameUdp,
+                    let target: crate::common::fakes::FakeTarget = match self.fakes_select_for {
+                        FakesSelectTarget::DiscordUdp => crate::common::fakes::FakeTarget::DiscordUdp,
+                        FakesSelectTarget::GameUdp => crate::common::fakes::FakeTarget::GameUdp,
                     };
-                    match crate::fakes::replace_active_fake(&self.fakes_state, &target, &source) {
+                    match crate::common::fakes::replace_active_fake(&self.fakes_state, &target, &source) {
                         Ok(()) => {
-                            self.fakes_state = crate::fakes::load_fakes_state();
+                            self.fakes_state = crate::common::fakes::load_fakes_state();
                             self.active_screen = ActiveScreen::FakesSubmenu;
                             self.status_message = Some(rust_i18n::t!("msg_fakes_replaced").into_owned());
                         }
@@ -2016,8 +2021,8 @@ impl AppState {
                                     let exe_path = std::env::current_exe().map_err(|e| e.to_string());
                                     match exe_path {
                                         Ok(p) => {
-                                            let config_path = crate::config::config_path();
-                                            let cache_dir = crate::config::get_cache_dir();
+                                            let config_path = crate::common::config::config_path();
+                                            let cache_dir = crate::common::config::get_cache_dir();
                                             mgr.install(&p, &config_path, &cache_dir).and_then(|_| mgr.start())
                                         }
                                         Err(e) => Err(e),
@@ -2152,7 +2157,7 @@ impl AppState {
                                 .filter(|(_, name)| preselected.contains(name))
                                 .map(|(i, _)| i)
                                 .collect();
-                            self.z2_bundle = crate::autotune::TargetBundle::Manual;
+                            self.z2_bundle = crate::diagnostics::autotune::TargetBundle::Manual;
                             self.refresh_z2_targets();
                         }
                         self.z2_list_index = 0;
@@ -2185,20 +2190,16 @@ impl AppState {
                     self.domain_files_index = 0;
                     self.status_message = None;
                 }
-                AutotuneMenuState::ServiceMatrix => {
-                    self.should_run_service_matrix = true;
-                    self.status_message = None;
-                }
                 AutotuneMenuState::Results => {
                     self.active_screen = ActiveScreen::AutotuneResultsSubmenu;
                     self.autotune_results_index = 0;
                     self.status_message = None;
                 }
-                AutotuneMenuState::Run => {
+                AutotuneMenuState::Blockcheck => {
                     if crate::platform::is_nfqws_running() {
-                        self.status_message = Some(rust_i18n::t!("autotune_err_nfqws_running").into_owned());
+                        self.status_message = Some(rust_i18n::t!("blockcheck_err_running").into_owned());
                     } else {
-                        self.should_run_autotune = true;
+                        self.should_run_blockcheck = true;
                     }
                 }
                 AutotuneMenuState::Back => {
@@ -2243,7 +2244,7 @@ impl AppState {
             }
             ActiveScreen::AutotunePresetSelectionSubmenu => {
                 let idx = self.autotune_preset_index;
-                if idx >= crate::autotune::PRESETS.len() {
+                if idx >= crate::diagnostics::autotune::PRESETS.len() {
                     self.active_screen = ActiveScreen::AutotuneSubmenu;
                     self.status_message = None;
                     return;
@@ -2261,8 +2262,8 @@ impl AppState {
                     .preset_indices
                     .iter()
                     .filter_map(|&i| {
-                        if i < crate::autotune::PRESETS.len() {
-                            Some(crate::autotune::PRESETS[i].name)
+                        if i < crate::diagnostics::autotune::PRESETS.len() {
+                            Some(crate::diagnostics::autotune::PRESETS[i].name)
                         } else {
                             None
                         }
@@ -2324,10 +2325,6 @@ impl AppState {
                 self.active_screen = ActiveScreen::AutotuneSubmenu;
                 self.status_message = None;
             }
-            ActiveScreen::AutotuneServiceMatrixSubmenu => {
-                self.should_run_service_matrix = true;
-                self.status_message = None;
-            }
             ActiveScreen::SettingsSubmenu => match self.settings_menu {
                 SettingsMenuState::Editor => {
                     self.refresh_editors();
@@ -2336,6 +2333,9 @@ impl AppState {
                 }
                 SettingsMenuState::BackupLists => {
                     self.toggle_backup_lists();
+                }
+                SettingsMenuState::HttpClient => {
+                    self.toggle_http_client();
                 }
                 SettingsMenuState::ViewLogs => {
                     self.load_logs();
@@ -2363,94 +2363,11 @@ impl AppState {
     }
 
     fn count_results_items(&self) -> usize {
-        if let Some(ref results) = self.autotune_results {
-            let mut n = 10;
-            for pr in &results.preset_results {
-                n += 1;
-                n += pr.domain_checks.len();
-                if !pr.strategy_results.is_empty() {
-                    n += 1;
-                    for sr in &pr.strategy_results {
-                        n += 1;
-                        n += sr.domain_checks.len();
-                    }
-                    let working_count = pr.strategy_results.iter().filter(|s| s.works).count();
-                    if working_count > 0 {
-                        n += 1;
-                        n += working_count;
-                    }
-                }
-                n += 1;
-            }
-            if !results.common_strategies.is_empty() {
-                n += 1;
-                n += results.common_strategies.len();
-                n += 1;
-            }
-            n += 1;
-            n
-        } else if let Some(cached) = crate::autotune::load_results_file() {
+        if let Some(cached) = crate::diagnostics::autotune::load_results_file() {
             cached.lines().count() + 1
         } else {
             2
         }
-    }
-
-    pub fn service_matrix_label(&self) -> String {
-        self.strategies
-            .get(self.selected_strategy)
-            .filter(|name| !name.is_empty())
-            .cloned()
-            .unwrap_or_else(|| rust_i18n::t!("autotune_matrix_current").into_owned())
-    }
-
-    pub fn service_matrix_profiles(&self) -> Vec<String> {
-        let live = self.service_matrix_label();
-        let selected: Vec<String> = if self.engine.uses_presets() {
-            self.z2_selected_preset_names()
-        } else {
-            self.autotune_config
-                .strategy_indices
-                .iter()
-                .filter_map(|&index| self.strategies.get(index).cloned())
-                .collect()
-        };
-
-        let mut profiles: Vec<String> = Vec::new();
-        for name in selected {
-            if name != live && !profiles.contains(&name) {
-                profiles.push(name);
-            }
-        }
-        profiles
-    }
-
-    pub fn count_service_matrix_items(&self) -> usize {
-        if self.service_matrix_rows.is_empty() {
-            return 2;
-        }
-
-        let mut total = crate::autotune::render_matrix(&self.service_matrix_rows).len();
-        total += 2;
-        if !self.service_matrix_reports.is_empty() {
-            total += 1 + self.service_matrix_reports.len();
-        }
-        total += 2;
-        total
-    }
-
-    pub fn service_matrix_summary(&self) -> String {
-        if self.service_matrix_rows.is_empty() {
-            return rust_i18n::t!("menu_autotune_matrix_none").into_owned();
-        }
-
-        let usable = self
-            .service_matrix_rows
-            .iter()
-            .filter(|row| row.unblocks_everything())
-            .count();
-
-        format!("{} / {}", usable, self.service_matrix_rows.len())
     }
 
     pub fn is_ttl_autopick_selected(&self) -> bool {
@@ -2458,7 +2375,7 @@ impl AppState {
     }
 
     pub fn change_ttl(&mut self, forward: bool) {
-        let len = crate::ttl::TTL_MAX as i32 + 1;
+        let len = crate::common::ttl::TTL_MAX as i32 + 1;
         let current = self.dpi_desync_ttl.map_or(0, |v| v as i32);
         let new = if forward {
             (current + 1) % len
@@ -2466,7 +2383,7 @@ impl AppState {
             (current + len - 1) % len
         };
         self.dpi_desync_ttl = if new == 0 { None } else { Some(new as u8) };
-        let _ = crate::config::save_ttl(self.dpi_desync_ttl);
+        let _ = crate::common::config::save_ttl(self.dpi_desync_ttl);
     }
 
     pub fn cycle_current(&mut self, forward: bool) {
@@ -2511,8 +2428,8 @@ impl AppState {
                             self.selected_ipset_mode = (self.selected_ipset_mode + len - 1) % len;
                         }
                         let new_mode = self.available_ipset_modes[self.selected_ipset_mode];
-                        crate::ipset::apply_ipset_mode(old_mode, new_mode);
-                        self.available_ipset_modes = crate::ipset::get_available_modes_for(&self.engine);
+                        crate::common::ipset::apply_ipset_mode(old_mode, new_mode);
+                        self.available_ipset_modes = crate::common::ipset::get_available_modes_for(&self.engine);
                         self.selected_ipset_mode = self
                             .available_ipset_modes
                             .iter()
@@ -2579,7 +2496,7 @@ impl AppState {
             ActiveScreen::AutotuneSubmenu => match self.autotune_menu {
                 AutotuneMenuState::PresetSelection => {
                     self.active_screen = ActiveScreen::AutotunePresetSelectionSubmenu;
-                    let count = crate::autotune::PRESETS.len();
+                    let count = crate::diagnostics::autotune::PRESETS.len();
                     if self.autotune_preset_index >= count {
                         self.autotune_preset_index = count - 1;
                     }
@@ -2645,6 +2562,9 @@ impl AppState {
                 SettingsMenuState::BackupLists => {
                     self.toggle_backup_lists();
                 }
+                SettingsMenuState::HttpClient => {
+                    self.toggle_http_client();
+                }
                 _ => {
                     if forward {
                         self.toggle_current();
@@ -2695,7 +2615,6 @@ impl AppState {
             ActiveScreen::AutotuneZ2PresetsSubmenu => rust_i18n::t!("tui_title_autotune_z2_presets").into_owned(),
             ActiveScreen::AutotuneZ2TargetsSubmenu => rust_i18n::t!("tui_title_autotune_z2_targets").into_owned(),
             ActiveScreen::AutotuneResultsSubmenu => rust_i18n::t!("tui_title_autotune_results").into_owned(),
-            ActiveScreen::AutotuneServiceMatrixSubmenu => rust_i18n::t!("tui_title_autotune_matrix").into_owned(),
             ActiveScreen::SettingsSubmenu => rust_i18n::t!("tui_title_settings").into_owned(),
             ActiveScreen::SettingsEditorSubmenu => rust_i18n::t!("tui_title_settings_editor").into_owned(),
             ActiveScreen::LogViewer => rust_i18n::t!("tui_title_logs").into_owned(),
@@ -2773,9 +2692,6 @@ impl AppState {
             }
             ActiveScreen::AutotuneResultsSubmenu => {
                 vec![root, autotune, rust_i18n::t!("menu_autotune_results").into_owned()]
-            }
-            ActiveScreen::AutotuneServiceMatrixSubmenu => {
-                vec![root, autotune, rust_i18n::t!("menu_autotune_matrix").into_owned()]
             }
             ActiveScreen::SettingsSubmenu => vec![root, settings],
             ActiveScreen::SettingsEditorSubmenu => {
@@ -2869,9 +2785,8 @@ impl AppState {
                 AutotuneMenuState::Protocols => rust_i18n::t!("help_autotune_proto").into_owned(),
                 AutotuneMenuState::BlockChecks => rust_i18n::t!("help_autotune_blockchecks").into_owned(),
                 AutotuneMenuState::EditDomains => rust_i18n::t!("help_autotune_edit_domains").into_owned(),
-                AutotuneMenuState::ServiceMatrix => rust_i18n::t!("help_autotune_matrix").into_owned(),
                 AutotuneMenuState::Results => rust_i18n::t!("help_autotune_results_sel").into_owned(),
-                AutotuneMenuState::Run => rust_i18n::t!("help_autotune_run").into_owned(),
+                AutotuneMenuState::Blockcheck => rust_i18n::t!("help_autotune_blockcheck").into_owned(),
                 AutotuneMenuState::Back => rust_i18n::t!("help_back").into_owned(),
             },
             ActiveScreen::AutotuneProtocolsSubmenu => match self.autotune_protocols_menu {
@@ -2888,10 +2803,10 @@ impl AppState {
             ActiveScreen::AutotuneZ2PresetsSubmenu => rust_i18n::t!("help_autotune_z2_presets").into_owned(),
             ActiveScreen::AutotuneZ2TargetsSubmenu => rust_i18n::t!("help_autotune_z2_targets").into_owned(),
             ActiveScreen::AutotuneResultsSubmenu => rust_i18n::t!("help_autotune_results").into_owned(),
-            ActiveScreen::AutotuneServiceMatrixSubmenu => rust_i18n::t!("help_autotune_matrix_view").into_owned(),
             ActiveScreen::SettingsSubmenu => match self.settings_menu {
                 SettingsMenuState::Editor => rust_i18n::t!("help_settings_editor").into_owned(),
                 SettingsMenuState::BackupLists => rust_i18n::t!("help_settings_backup").into_owned(),
+                SettingsMenuState::HttpClient => rust_i18n::t!("help_settings_http_client").into_owned(),
                 SettingsMenuState::ViewLogs => rust_i18n::t!("help_settings_logs").into_owned(),
                 SettingsMenuState::Back => rust_i18n::t!("help_back").into_owned(),
             },
@@ -2910,7 +2825,7 @@ impl AppState {
 #[cfg(all(test, target_os = "linux"))]
 mod nav_tests {
     use super::MainMenuState;
-    use crate::config::ZapretEngine;
+    use crate::common::config::ZapretEngine;
 
     const VISUAL_ORDER: &[MainMenuState] = &[
         MainMenuState::DownloadDeps,

@@ -1,4 +1,4 @@
-use crate::config::ZapretEngine;
+use crate::common::config::ZapretEngine;
 use std::fs;
 
 fn natural_key(name: &str) -> String {
@@ -21,6 +21,10 @@ fn natural_key(name: &str) -> String {
     out
 }
 
+fn is_zapret1_strategy(name: &str) -> bool {
+    name.ends_with(".bat") && !name.starts_with('_') && !name.eq_ignore_ascii_case("service.bat")
+}
+
 fn zapret1_strategies() -> Vec<String> {
     let ws_dir = super::embedded::repo_dir();
     let mut strategies: Vec<String> = Vec::new();
@@ -29,7 +33,7 @@ fn zapret1_strategies() -> Vec<String> {
         if let Ok(entries) = fs::read_dir(&dir) {
             for entry in entries.flatten() {
                 if let Ok(name) = entry.file_name().into_string() {
-                    if name.ends_with(".bat") && !strategies.contains(&name) {
+                    if is_zapret1_strategy(&name) && !strategies.contains(&name) {
                         strategies.push(name);
                     }
                 }
@@ -75,5 +79,5 @@ pub fn get_strategies_for(engine: &ZapretEngine) -> Vec<String> {
 }
 
 pub fn get_strategies() -> Vec<String> {
-    get_strategies_for(&crate::runner::active_engine())
+    get_strategies_for(&crate::engine::runner::active_engine())
 }

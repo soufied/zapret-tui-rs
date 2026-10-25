@@ -146,7 +146,7 @@ pub fn build_deescalated_invocation(
 ) -> Vec<String> {
     let mut parts: Vec<String> = Vec::new();
 
-    if crate::utils::find_in_path("runuser").is_some() {
+    if crate::common::utils::find_in_path("runuser").is_some() {
         parts.push("runuser".to_string());
         parts.push("-u".to_string());
         parts.push(user.to_string());

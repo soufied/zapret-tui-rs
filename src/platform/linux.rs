@@ -91,7 +91,7 @@ fn elevated_args() -> Vec<String> {
 
     if !has_cache_dir_flag(&args) {
         args.push("--cache-dir".to_string());
-        args.push(crate::config::get_cache_dir().to_string_lossy().into_owned());
+        args.push(crate::common::config::get_cache_dir().to_string_lossy().into_owned());
     }
 
     args
@@ -112,9 +112,9 @@ pub fn ensure_admin() {
     let args = elevated_args();
     let session_env = preserved_session_environment();
 
-    if crate::utils::find_in_path("pkexec").is_some() {
+    if crate::common::utils::find_in_path("pkexec").is_some() {
         let mut pkexec_args: Vec<String> = Vec::new();
-        if crate::utils::find_in_path("env").is_some() && !session_env.is_empty() {
+        if crate::common::utils::find_in_path("env").is_some() && !session_env.is_empty() {
             pkexec_args.push("env".to_string());
             for (key, value) in &session_env {
                 pkexec_args.push(format!("{}={}", key, value));

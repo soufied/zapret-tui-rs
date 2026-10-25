@@ -39,8 +39,8 @@ pub fn render(app: &AppState) -> (Vec<ListItem<'static>>, String, usize) {
 
         let item = match state {
             SettingsMenuState::Editor => {
-                let label = crate::utils::active_editor_label();
-                let available = crate::utils::resolve_editor().is_some();
+                let label = crate::common::utils::active_editor_label();
+                let available = crate::common::utils::resolve_editor().is_some();
                 let style = if available {
                     Theme::normal_value()
                 } else {
@@ -69,6 +69,21 @@ pub fn render(app: &AppState) -> (Vec<ListItem<'static>>, String, usize) {
                     selected,
                 )
             }
+            SettingsMenuState::HttpClient => {
+                use crate::diagnostics::http_client::HttpClientKind;
+                let (value, style) = match app.http_client {
+                    HttpClientKind::Curl => ("curl", Theme::active_value()),
+                    HttpClientKind::CurlImpersonate if crate::diagnostics::http_client::impersonate_installed() => {
+                        ("curl-impersonate", Theme::active_value())
+                    }
+                    HttpClientKind::CurlImpersonate => ("curl-impersonate (not installed)", Theme::inactive_value()),
+                };
+                row(
+                    rust_i18n::t!("settings_http_client").into_owned(),
+                    Some(Span::styled(format!("‹ {} ›", value), style)),
+                    selected,
+                )
+            }
             SettingsMenuState::ViewLogs => row(
                 rust_i18n::t!("settings_logs").into_owned(),
                 Some(Span::styled(
@@ -87,7 +102,7 @@ pub fn render(app: &AppState) -> (Vec<ListItem<'static>>, String, usize) {
 
 pub fn render_editor(app: &AppState) -> (Vec<ListItem<'static>>, String, usize) {
     let mut items: Vec<ListItem<'static>> = Vec::new();
-    let configured = crate::config::load_editor();
+    let configured = crate::common::config::load_editor();
     let configured = configured.trim();
 
     for (idx, entry) in app.editor_entries.iter().enumerate() {

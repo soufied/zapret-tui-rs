@@ -86,7 +86,7 @@ start "zapret: %~n0" /min "%BIN%winws.exe" ^
 
 pub fn repo_dir() -> PathBuf {
     PathBuf::from(env::var("REPO_DIR").unwrap_or_else(|_| {
-        crate::config::ZapretEngine::Zapret1
+        crate::common::config::ZapretEngine::Zapret1
             .workspace_dir()
             .to_string_lossy()
             .into_owned()
@@ -94,7 +94,7 @@ pub fn repo_dir() -> PathBuf {
 }
 
 pub fn ensure_custom_strategies() -> Result<(), String> {
-    let dir = crate::config::get_cache_dir().join("custom-strategies");
+    let dir = crate::common::config::get_cache_dir().join("custom-strategies");
     if dir.exists() && !dir.is_dir() {
         return Err(format!(
             "custom-strategies exists but is not a directory: {}",
@@ -123,7 +123,7 @@ mod tests {
     #[test]
     fn writes_embedded_strategies() {
         std::env::set_var("ZAPRET_CACHE_DIR", "/tmp/cs_test");
-        let dir = crate::config::get_cache_dir().join("custom-strategies");
+        let dir = crate::common::config::get_cache_dir().join("custom-strategies");
         let _ = fs::remove_dir_all(&dir);
 
         ensure_custom_strategies().unwrap();

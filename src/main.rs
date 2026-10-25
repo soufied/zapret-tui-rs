@@ -1,23 +1,13 @@
-mod autotune;
-mod config;
-mod download;
-mod fakes;
+mod common;
+mod diagnostics;
+mod engine;
 mod firewalls;
 pub mod inits;
 mod platform;
-mod router;
-
-mod ingest;
-mod ipset;
-mod logger;
-mod runner;
-mod staging;
 mod strategy;
-mod ttl;
 mod tui;
-mod utils;
 
-rust_i18n::i18n!("locales", fallback = "en");
+rust_i18n::i18n!("assets/locales", fallback = "en");
 
 use clap::Parser;
 #[cfg(not(target_os = "windows"))]
@@ -34,9 +24,6 @@ use firewalls::LinuxBackend;
 
 #[cfg(target_os = "windows")]
 use firewalls::windivert::WinDivertBackend;
-
-#[cfg(target_os = "windows")]
-pub mod defender;
 
 #[derive(Parser, Debug)]
 #[command(
@@ -79,6 +66,24 @@ struct Cli {
     )]
     router: bool,
 
+    #[arg(long = "blockcheck", help = "Rank strategies against the blockcheck domains, then exit")]
+    blockcheck: bool,
+
+    #[arg(long = "bc-engine", help = "Blockcheck engine: zapret or zapret2 (default: zapret)")]
+    bc_engine: Option<String>,
+
+    #[arg(long = "bc-strategies", help = "Blockcheck: comma-separated strategy or preset names (default: all)")]
+    bc_strategies: Option<String>,
+
+    #[arg(long = "bc-limit", help = "Blockcheck: test only the first N strategies")]
+    bc_limit: Option<usize>,
+
+    #[arg(long = "bc-per-list", default_value_t = 5, help = "Blockcheck (zapret2): random hosts per hostlist, 1-20")]
+    bc_per_list: usize,
+
+    #[arg(long = "bc-services", help = "Blockcheck (zapret only): comma-separated service keys, e.g. yt,ds")]
+    bc_services: Option<String>,
+
     #[arg(short = 'h', long = "help", help = "Show this help")]
     help: bool,
 }
@@ -99,6 +104,12 @@ fn show_help() {
     println!("{}", rust_i18n::t!("cli_mode1"));
     println!("{}", rust_i18n::t!("cli_mode2"));
     println!("{}", rust_i18n::t!("cli_mode3"));
+    println!("  --blockcheck           Rank strategies against the blockcheck domains, then exit");
+    println!("    --bc-engine <name>     zapret (default) or zapret2");
+    println!("    --bc-strategies <a,b>  test only these strategies or presets");
+    println!("    --bc-limit <N>         test only the first N strategies");
+    println!("    --bc-per-list <N>      zapret2: random hosts per hostlist (default 5)");
+    println!("    --bc-services <a,b>    zapret only: service keys, e.g. yt,ds");
 }
 
 fn main() {
@@ -128,10 +139,10 @@ fn main() {
     if let Some(ref d) = args.cache_dir {
         std::env::set_var("ZAPRET_CACHE_DIR", d);
     } else if args.router && std::env::var_os("ZAPRET_CACHE_DIR").is_none() {
-        std::env::set_var("ZAPRET_CACHE_DIR", router::DEFAULT_CACHE_DIR);
+        std::env::set_var("ZAPRET_CACHE_DIR", engine::router::DEFAULT_CACHE_DIR);
     }
 
-    if let Err(e) = config::ensure_default_config() {
+    if let Err(e) = common::config::ensure_default_config() {
         println!("{}{}", rust_i18n::t!("msg_err"), e);
     }
 
@@ -144,6 +155,25 @@ fn main() {
         return;
     }
 
+    if args.blockcheck {
+        let per_list = args.bc_per_list;
+        if !(1..=20).contains(&per_list) {
+            eprintln!("--bc-per-list must be from 1 to 20");
+            exit(1);
+        }
+        let engine = crate::common::config::ZapretEngine::from_str(args.bc_engine.as_deref().unwrap_or("zapret"));
+        let opts = diagnostics::blockcheck::Options {
+            engine,
+            interface: args.interface.clone(),
+            names: args.bc_strategies.as_deref().map(diagnostics::blockcheck::split_csv).unwrap_or_default(),
+            limit: args.bc_limit.unwrap_or(0),
+            per_list,
+            services: args.bc_services.as_deref().map(diagnostics::blockcheck::split_csv).unwrap_or_default(),
+            domains: Vec::new(),
+        };
+        exit(diagnostics::blockcheck::run_cli(opts));
+    }
+
     let mut use_interface = args.interface.clone();
     let mut use_strategy = args.strategy.clone();
     let mut use_gamefilter_tcp = args.gamefiltertcp;
@@ -154,15 +184,15 @@ fn main() {
 
     let config_file = match (&args.config, args.router) {
         (Some(path), _) => Some(path.clone()),
-        (None, true) => Some(config::config_path().to_string_lossy().into_owned()),
+        (None, true) => Some(common::config::config_path().to_string_lossy().into_owned()),
         (None, false) => None,
     };
 
     if let Some(config_file) = &config_file {
         println!("{}{}", rust_i18n::t!("msg_load_cfg"), config_file);
-        match config::load_config(config_file) {
+        match common::config::load_config(config_file) {
             Ok(cfg) => {
-                runner::set_engine(cfg.engine.clone());
+                engine::runner::set_engine(cfg.engine.clone());
                 std::env::set_var("REPO_DIR", cfg.engine.workspace_dir());
                 use_interface = cfg.interface;
                 use_strategy = Some(cfg.strategy);
@@ -189,7 +219,7 @@ fn main() {
             eprintln!("{}", rust_i18n::t!("router_err_no_strategy"));
             exit(1);
         }
-        router::print_preflight();
+        engine::router::print_preflight();
     }
 
     #[cfg(not(target_os = "windows"))]
@@ -216,7 +246,7 @@ fn main() {
 
     loop {
         if is_interactive {
-            let interfaces = config::get_interfaces();
+            let interfaces = common::config::get_interfaces();
             let strategies = strategy::get_strategies();
             let mut app = tui::AppState::new(interfaces, strategies);
 
@@ -232,7 +262,7 @@ fn main() {
                 .unwrap_or(&"any".to_string())
                 .to_string();
             use_strategy = app.strategies.get(app.selected_strategy).cloned();
-            runner::set_engine(app.engine.clone());
+            engine::runner::set_engine(app.engine.clone());
             use_gamefilter_tcp = app.tcp_gamefilter;
             use_gamefilter_udp = app.udp_gamefilter;
             #[cfg(target_os = "linux")]
@@ -258,8 +288,8 @@ fn main() {
             }
         };
 
-        let nfqws_ok = download::check_nfqws_installed();
-        let strat_ok = download::check_strategies_installed();
+        let nfqws_ok = common::download::check_nfqws_installed();
+        let strat_ok = common::download::check_strategies_installed();
         if !nfqws_ok || !strat_ok {
             if !nfqws_ok && !strat_ok {
                 eprintln!("{}", rust_i18n::t!("msg_err_both_missing"));
@@ -276,7 +306,7 @@ fn main() {
             }
         }
 
-        if !runner::active_engine().supports_game_filter() {
+        if !engine::runner::active_engine().supports_game_filter() {
             use_gamefilter_tcp = false;
             use_gamefilter_udp = false;
         }
@@ -286,6 +316,9 @@ fn main() {
 
         #[cfg(target_os = "windows")]
         let backend = WinDivertBackend;
+
+        #[cfg(not(any(target_os = "linux", target_os = "windows")))]
+        let backend = firewalls::UnsupportedBackend;
 
         #[cfg(target_os = "linux")]
         let backend_info = format!(", backend={}", use_backend.to_config());
@@ -302,7 +335,7 @@ fn main() {
             backend_info
         );
 
-        if let Err(e) = runner::run_zapret(
+        if let Err(e) = engine::runner::run_zapret(
             &strategy_file,
             &use_interface,
             use_gamefilter_tcp,
@@ -310,7 +343,7 @@ fn main() {
             &backend,
         ) {
             eprintln!("{}", e);
-            runner::stop_zapret_quiet(&backend);
+            engine::runner::stop_zapret_quiet(&backend);
             if is_interactive {
                 thread::sleep(Duration::from_secs(2));
                 continue;
@@ -325,13 +358,13 @@ fn main() {
         let mut daemon_lost = false;
         while RUNNING.load(Ordering::SeqCst) {
             thread::sleep(Duration::from_millis(100));
-            if !runner::nfqws_process_running() {
+            if !engine::runner::nfqws_process_running() {
                 daemon_lost = true;
                 break;
             }
         }
 
-        runner::stop_zapret(&backend);
+        engine::runner::stop_zapret(&backend);
 
         if daemon_lost {
             eprintln!("{}{}", rust_i18n::t!("err_start_nfqws"), rust_i18n::t!("err_nfqws_vanished"));

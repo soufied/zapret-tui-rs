@@ -93,7 +93,7 @@ pub fn list_file_present(path: &Path) -> bool {
 pub fn placeholder_content(kind: ListRefKind, file_name: &str) -> String {
     match kind {
         ListRefKind::HostInclude => format!("{}\n", PLACEHOLDER_HOST),
-        ListRefKind::IpInclude if file_name != crate::ipset::IPSET_ALL_FILE => format!("{}\n", PLACEHOLDER_IP),
+        ListRefKind::IpInclude if file_name != crate::common::ipset::IPSET_ALL_FILE => format!("{}\n", PLACEHOLDER_IP),
         _ => String::new(),
     }
 }
@@ -206,7 +206,7 @@ mod tests {
         assert!(placeholder_content(ListRefKind::HostExclude, "x.txt").is_empty());
         assert!(placeholder_content(ListRefKind::IpExclude, "x.txt").is_empty());
         assert!(placeholder_content(ListRefKind::HostAuto, "x.txt").is_empty());
-        assert!(placeholder_content(ListRefKind::IpInclude, crate::ipset::IPSET_ALL_FILE).is_empty());
+        assert!(placeholder_content(ListRefKind::IpInclude, crate::common::ipset::IPSET_ALL_FILE).is_empty());
     }
 
     #[test]
