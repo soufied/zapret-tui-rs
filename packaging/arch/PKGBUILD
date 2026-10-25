@@ -1,5 +1,5 @@
 pkgname=zapret-rust
-pkgver=2.3.0
+pkgver=1.0.0
 pkgrel=1
 pkgdesc="TUI and CLI controller for zapret and zapret2 DPI bypass (nfqws/winws)"
 arch=('x86_64' 'aarch64')

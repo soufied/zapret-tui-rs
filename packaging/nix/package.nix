@@ -24,7 +24,7 @@ let
 in
 rustPlatform.buildRustPackage {
   pname = "zapret-rust";
-  version = "2.3.0";
+  version = "1.0.0";
 
   inherit src;
 

@@ -2,9 +2,9 @@
 
 A terminal UI (TUI) and command-line controller for [**zapret**](https://github.com/bol-van/zapret) (`nfqws` / `winws`) and [**zapret2**](https://github.com/bol-van/zapret2) (`nfqws2` / `winws2`) by [bol-van](https://github.com/bol-van).
 
-It automates DPI (deep packet inspection) bypass setups for commonly blocked services such as Discord and YouTube. It downloads engine binaries and strategy bundles, sets up firewall rules, and can run as a background service on Linux and Windows.
+It automates DPI (deep packet inspection) bypass setups for commonly blocked services such as Discord and YouTube. It downloads engine binaries and strategy bundles, sets up firewall rules, and can run as a background service on Linux and Windows(?).
 
-> **Testing status:** only Linux has been tested. Windows, macOS, FreeBSD, and OpenWrt builds may or may not work.
+> **Testing status:** only Linux has been tested. Windows, and OpenWrt builds may or may not work.
 
 ---
 
@@ -579,7 +579,6 @@ In short, you are free to use, study, modify, and redistribute this software. If
 
 - Make the complete corresponding source code available under the same license.
 - Keep the copyright and license notices intact.
-- Clearly mark any changes you made.
 
 The software comes with no warranty. See the [LICENSE](LICENSE) file for the full terms.
 
