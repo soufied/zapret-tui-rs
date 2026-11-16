@@ -1,5 +1,7 @@
 # zapret-tui-rs
 
+This project is now Deprecated. Its successor, HUB, brings a richer feature set and a whole ecosystem of its own, and I’m shifting my focus there, so this repository will no longer receive updates. If all you need is zapret, the project will keep working as it is. For a more capable alternative, I’d recommend [zapret-dot](https://github.com/dotFelixan/zapret-dot), which runs on Windows and offers a wide range of features.
+
 A terminal UI (TUI) and command-line controller for [**zapret**](https://github.com/bol-van/zapret) (`nfqws` / `winws`) and [**zapret2**](https://github.com/bol-van/zapret2) (`nfqws2` / `winws2`) by [bol-van](https://github.com/bol-van).
 
 It automates DPI (deep packet inspection) bypass setups for commonly blocked services such as Discord and YouTube. It downloads engine binaries and strategy bundles, sets up firewall rules, and can run as a background service on Linux and Windows(?).
